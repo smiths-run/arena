@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+*.log
+.DS_Store
+
+# Foundry
+out/
+cache/
+broadcast/*/dry-run/
+
+# Secrets — never commit
+recovery_file_*.dat
+*.pem

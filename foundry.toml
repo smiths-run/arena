@@ -13,3 +13,8 @@ arc_testnet = "${ARC_TESTNET_RPC_URL}"
 
 [fmt]
 line_length = 110
+
+[invariant]
+runs = 256
+depth = 64
+fail_on_revert = true

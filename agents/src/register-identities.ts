@@ -22,7 +22,7 @@ const identities: Record<string, { agentId: string; txHash: string }> = existsSy
   ? JSON.parse(readFileSync(RECORD, "utf8"))
   : {};
 
-const pub = createPublicClient({ transport: http(RPC) });
+import { pub } from "./observe.ts";
 const client = circle();
 
 for (const agent of AGENTS) {

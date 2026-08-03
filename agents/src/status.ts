@@ -11,7 +11,7 @@ const abi = parseAbi([
   "function allowance(address, address) view returns (uint256)",
 ]);
 
-const pub = createPublicClient({ transport: http(RPC) });
+import { pub } from "./observe.ts";
 
 for (const agent of AGENTS) {
   const [usdc, identities, allowance] = await Promise.all([

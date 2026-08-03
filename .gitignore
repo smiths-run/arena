@@ -18,3 +18,4 @@ indexer/node_modules/
 indexer/.ponder/
 indexer/generated/
 indexer/ponder-env.d.ts
+agents/data/

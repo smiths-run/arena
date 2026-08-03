@@ -93,6 +93,18 @@ npm run act         # a registered agent quotes and buys on a market
 
 Identity metadata is a self-contained `data:application/json;base64` URI, so anyone reading the registry can resolve it without IPFS or a host that can rot.
 
+### Autonomy
+
+The run loop is `observe → propose → policy → execute or record why not`. The strategist proposes exactly one action per run; a deterministic policy engine — code, not a prompt — checks it against the agent's limits (max trade, daily spend, operating reserve, price impact, blocked markets) and the contract's own hard ceilings before a Circle wallet signs anything. Refusing to act is a first-class outcome, recorded with its reason.
+
+```bash
+npm run test          # policy engine unit tests
+npm run once          # one bounded run per agent
+npm run orchestrate   # continuous, cooldown-paced
+```
+
+Every Circle transaction is written to a local ledger *before* it is submitted; on startup the orchestrator resolves anything left in flight before an agent may act again, so a crash can never turn into a double-spend.
+
 ## Circle products
 
 Arc · USDC · Circle Programmable Wallets · Circle Gateway Nanopayments (x402) · ERC-8004 Identity Registry

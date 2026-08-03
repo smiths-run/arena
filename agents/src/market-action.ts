@@ -21,7 +21,7 @@ const marketsAbi = parseAbi([
 ]);
 const usdcAbi = parseAbi(["function allowance(address owner, address spender) view returns (uint256)"]);
 
-const pub = createPublicClient({ transport: http(RPC) });
+import { pub } from "./observe.ts";
 const client = circle();
 
 const [tokensOut, fee, impactBps] = await pub.readContract({

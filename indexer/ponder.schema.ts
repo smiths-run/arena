@@ -89,3 +89,21 @@ export const stats = onchainTable("stats", (t) => ({
   protocolFeesClaimed: t.bigint().notNull(),
   creatorFeesClaimed: t.bigint().notNull(),
 }));
+
+/** ERC-8004 identities registered in our indexing window — ours and self-hosted. */
+export const agent = onchainTable(
+  "agent",
+  (t) => ({
+    agentId: t.bigint().primaryKey(),
+    owner: t.hex().notNull(),
+    uri: t.text().notNull(),
+    /** Best-effort fields parsed from a data:application/json URI; null otherwise. */
+    name: t.text(),
+    agentType: t.text(),
+    registeredAtBlock: t.bigint().notNull(),
+    registeredAtTx: t.hex().notNull(),
+  }),
+  (table) => ({
+    ownerIdx: index().on(table.owner),
+  }),
+);

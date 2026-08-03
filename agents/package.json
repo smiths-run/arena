@@ -1,0 +1,21 @@
+{
+  "name": "smiths-run-agents",
+  "private": true,
+  "type": "module",
+  "description": "Agent-side tooling: Circle wallets, ERC-8004 identity, market actions.",
+  "scripts": {
+    "register": "node src/register-identities.ts",
+    "act": "node src/market-action.ts",
+    "status": "node src/status.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@circle-fin/developer-controlled-wallets": "^10.8.0",
+    "dotenv": "^17.2.3",
+    "viem": "^2.55.10"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.3"
+  }
+}

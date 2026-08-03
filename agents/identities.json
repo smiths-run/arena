@@ -1,0 +1,14 @@
+{
+  "anvil": {
+    "agentId": "859270",
+    "txHash": "0x4d5a5b379a264f803d7f8931a7f3a490bc6ccbf39445489ba042b5f621a192bc"
+  },
+  "bellows": {
+    "agentId": "859271",
+    "txHash": "0x721adcf8ea07ee0db0080a565ddcac47cd34e92151cf705b87ba035b33ad8718"
+  },
+  "tongs": {
+    "agentId": "859272",
+    "txHash": "0xd0d95efadb78ee897cf38433bb22b1bd7831fbf9687fd6f1cd47d328fe567979"
+  }
+}

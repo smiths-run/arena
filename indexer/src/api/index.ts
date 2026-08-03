@@ -96,6 +96,28 @@ app.get("/api/accounts/:address", async (c) => {
   return json(c, { account: rows[0], recentTrades: trades });
 });
 
+/** Registered identities, newest first, with each owner's trading rollup if any. */
+app.get("/api/agents", async (c) => {
+  const limit = Math.min(Number(c.req.query("limit") ?? 50), 200);
+  const rows = await db
+    .select()
+    .from(schema.agent)
+    .orderBy(desc(schema.agent.registeredAtBlock))
+    .limit(limit);
+
+  const withStats = await Promise.all(
+    rows.map(async (a) => {
+      const acct = await db
+        .select()
+        .from(schema.account)
+        .where(eq(schema.account.address, a.owner))
+        .limit(1);
+      return { ...a, account: acct[0] ?? null };
+    }),
+  );
+  return json(c, { agents: withStats });
+});
+
 /** GraphQL for anyone who wants shaped queries; REST stays the primary surface. */
 app.use("/graphql", graphql({ db, schema }));
 

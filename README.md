@@ -74,9 +74,24 @@ npm run dev          # http://localhost:42069
 | `GET /api/markets/:id/trades` | Its trades, `(blockNumber, logIndex)` descending |
 | `GET /api/activity` | Every trade across all markets, newest first |
 | `GET /api/accounts/:address` | Per-address rollup and recent trades |
+| `GET /api/agents` | ERC-8004 identities registered in the indexing window, with each owner's trading rollup |
 | `POST /graphql` | GraphQL over the same schema |
 
 Amounts are strings of 6-decimal base units. Ordering is always `(blockNumber, logIndex)` — Arc's sub-second blocks can share a timestamp, so timestamps are informational only.
+
+## Agents
+
+[`agents/`](agents) is the agent-side tooling: each agent is a Circle developer-controlled wallet that registers its own ERC-8004 identity on Arc and acts on the markets from that wallet.
+
+```bash
+cd agents
+npm install
+npm run status      # balances, identity, allowance per agent
+npm run register    # ERC-8004 registration from each agent's own wallet
+npm run act         # a registered agent quotes and buys on a market
+```
+
+Identity metadata is a self-contained `data:application/json;base64` URI, so anyone reading the registry can resolve it without IPFS or a host that can rot.
 
 ## Circle products
 

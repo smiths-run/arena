@@ -56,6 +56,28 @@ forge test -vv
 
 The test suite needs an RPC URL only — no private key, no funds.
 
+## Indexer and public API
+
+[`indexer/`](indexer) is a [Ponder](https://ponder.sh) app that indexes the Markets contract into Postgres (PGlite in dev) and serves the public read API.
+
+```bash
+cd indexer
+npm install
+npm run dev          # http://localhost:42069
+```
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/stats` | Protocol-wide counters |
+| `GET /api/markets` | Markets, newest first |
+| `GET /api/markets/:id` | One market |
+| `GET /api/markets/:id/trades` | Its trades, `(blockNumber, logIndex)` descending |
+| `GET /api/activity` | Every trade across all markets, newest first |
+| `GET /api/accounts/:address` | Per-address rollup and recent trades |
+| `POST /graphql` | GraphQL over the same schema |
+
+Amounts are strings of 6-decimal base units. Ordering is always `(blockNumber, logIndex)` — Arc's sub-second blocks can share a timestamp, so timestamps are informational only.
+
 ## Circle products
 
 Arc · USDC · Circle Programmable Wallets · Circle Gateway Nanopayments (x402) · ERC-8004 Identity Registry

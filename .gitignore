@@ -12,3 +12,9 @@ broadcast/*/dry-run/
 # Secrets — never commit
 recovery_file_*.dat
 *.pem
+
+# Indexer
+indexer/node_modules/
+indexer/.ponder/
+indexer/generated/
+indexer/ponder-env.d.ts

@@ -14,6 +14,7 @@ import { heuristicStrategist, type Strategist } from "./strategist.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 import * as executor from "./executor.ts";
+import * as intel from "./intel.ts";
 
 export async function runOnce(
   agentName: string,
@@ -51,6 +52,55 @@ export async function runOnce(
       return;
     }
 
+    // Paid intelligence, before committing capital. The trader's own signal shows
+    // that a market has outside trades; it cannot show whether that flow is one
+    // wallet cycling its own market. The analyst can, so anvil buys the answer —
+    // and the report is allowed to talk it out of the trade.
+    let intelCost: bigint | undefined;
+    let intelVerdict: string | undefined;
+    if (action.kind === "buy" && strategy.paidIntel.enabled) {
+      try {
+        await intel.ensureGatewayFunds(client, agent, (purpose, call, idem) =>
+          executor.submit(
+            client,
+            agent,
+            purpose,
+            call.contractAddress,
+            call.abiFunctionSignature,
+            call.abiParameters,
+            idem,
+          ),
+        );
+
+        const bought = await intel.buyReport(client, agent, action.marketId, runId);
+        intelCost = bought.costUsdc;
+        intelVerdict = bought.report.verdict;
+        store.spendRecord(agentName, bought.costUsdc);
+        log(
+          `paid ${Number(bought.costUsdc) / 1e6} USDC for a report on market ${action.marketId}: ` +
+            `${bought.report.verdict} (risk ${bought.report.risk}, ` +
+            `${bought.report.externalTraders} external trader(s))`,
+        );
+
+        if (bought.report.verdict === "unfavourable") {
+          store.finishRun(runId, "skipped", {
+            reason:
+              `bought intelligence on market ${action.marketId} and declined: ` +
+              bought.report.findings[0],
+            intelCost,
+            intelVerdict,
+            intelMarket: action.marketId,
+          });
+          log(`skip on paid advice — ${bought.report.findings[0]}`);
+          return;
+        }
+      } catch (err) {
+        // Intelligence is an enhancement, not a dependency: if the desk is down the
+        // agent proceeds on its own signal rather than freezing.
+        log(`intelligence unavailable, proceeding unaided — ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     // The policy engine judges with fresh numbers, not the strategist's claims.
     const observation: Observation = {
       balanceUsdc: balance,
@@ -69,7 +119,12 @@ export async function runOnce(
 
     const verdict = evaluate(action, strategy, observation);
     if (!verdict.ok) {
-      store.finishRun(runId, "rejected", { actionKind: action.kind, reason: verdict.reason });
+      store.finishRun(runId, "rejected", {
+        actionKind: action.kind,
+        reason: verdict.reason,
+        intelCost,
+        intelVerdict,
+      });
       log(`policy rejected ${action.kind} — ${verdict.reason}`);
       return;
     }
@@ -81,6 +136,9 @@ export async function runOnce(
       txHash: done.txHash,
       usdc: done.usdcMoved,
       marketId: done.marketId,
+      intelCost,
+      intelVerdict,
+      intelMarket: intelCost !== undefined && action.kind === "buy" ? action.marketId : undefined,
     });
     log(`acted: ${summarize(action)}  tx=${done.txHash}`);
   } catch (err) {

@@ -31,6 +31,12 @@ export interface Strategy {
   launchBuyUsdc: bigint;
   /** Seconds between runs; the orchestrator will not wake the agent sooner. */
   cooldownSeconds: number;
+  /**
+   * Buy a report from the analyst desk before committing to a buy. The trader's
+   * own signal cannot distinguish genuine outside interest from one wallet
+   * cycling a market; the report can, so it is worth paying for.
+   */
+  paidIntel: { enabled: boolean; maxCostUsdc: bigint };
 }
 
 export const STRATEGIES: Record<string, Strategy> = {
@@ -48,6 +54,7 @@ export const STRATEGIES: Record<string, Strategy> = {
     maxOwnMarkets: 0,
     launchBuyUsdc: 0n,
     cooldownSeconds: 60,
+    paidIntel: { enabled: true, maxCostUsdc: 10_000n },
   },
   /** Analyst: allowed to buy but demands so much external evidence it rarely does.
    *  Its job is the x402 report desk (M6); refusing trades is expected behaviour. */
@@ -64,6 +71,7 @@ export const STRATEGIES: Record<string, Strategy> = {
     maxOwnMarkets: 0,
     launchBuyUsdc: 0n,
     cooldownSeconds: 90,
+    paidIntel: { enabled: false, maxCostUsdc: 0n },
   },
   /** Market-maker: launches markets and lives off creator fees from outside flow. */
   tongs: {
@@ -76,9 +84,10 @@ export const STRATEGIES: Record<string, Strategy> = {
     minExternalTrades: 0,
     lookbackBlocks: 2_000n,
     takeProfitBps: 1_000n,
-    maxOwnMarkets: 2,
+    maxOwnMarkets: 3,
     launchBuyUsdc: 1_000_000n,
     cooldownSeconds: 120,
+    paidIntel: { enabled: false, maxCostUsdc: 0n },
   },
 };
 

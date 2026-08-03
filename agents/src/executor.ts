@@ -29,7 +29,7 @@ export interface AgentHandle {
 type Circle = ReturnType<typeof circle>;
 
 /** Submit one contract call with the pending-row-first discipline. */
-async function submit(
+export async function submit(
   client: Circle,
   agent: AgentHandle,
   purpose: string,

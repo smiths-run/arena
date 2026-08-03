@@ -69,6 +69,9 @@ export interface Run {
   tx_hash: string | null;
   usdc: string | null;
   market_id: string | null;
+  intel_cost: string | null;
+  intel_verdict: string | null;
+  intel_market: string | null;
 }
 
 export interface Stats {
@@ -77,6 +80,36 @@ export interface Stats {
   volumeUsdc: string;
   protocolFeesClaimed: string;
   creatorFeesClaimed: string;
+}
+
+export interface IntelPurchase {
+  id: number;
+  run_id: number | null;
+  buyer: string;
+  market_id: string;
+  cost_usdc: string;
+  verdict: string | null;
+  settlement_ref: string | null;
+  at: number;
+}
+
+export interface IntelSale {
+  id: number;
+  seller: string;
+  payer: string;
+  market_id: string;
+  amount_usdc: string;
+  settlement_ref: string | null;
+  at: number;
+}
+
+export interface IntelLedger {
+  purchases: IntelPurchase[];
+  sales: IntelSale[];
+  totals: {
+    bought: Array<{ buyer: string; count: number; total: string }>;
+    sold: Array<{ seller: string; count: number; total: string }>;
+  };
 }
 
 export const api = {
@@ -88,6 +121,7 @@ export const api = {
   activity: (limit = 40) => get<{ activity: Trade[] }>(`${INDEXER}/api/activity?limit=${limit}`),
   agents: () => get<{ agents: AgentRow[] }>(`${INDEXER}/api/agents?limit=100`),
   runs: (limit = 60) => get<{ runs: Run[] }>(`${RECEIPTS}/runs?limit=${limit}`),
+  intel: () => get<IntelLedger>(`${RECEIPTS}/intel`),
 };
 
 // ── formatting ──────────────────────────────────────────────────────────────

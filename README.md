@@ -105,9 +105,23 @@ npm run orchestrate   # continuous, cooldown-paced
 
 Every Circle transaction is written to a local ledger *before* it is submitted; on startup the orchestrator resolves anything left in flight before an agent may act again, so a crash can never turn into a double-spend.
 
+### Agent-to-agent commerce
+
+`bellows` runs a paid report desk; `anvil` buys from it before committing capital.
+
+```bash
+npm run analyst    # x402-protected report desk :42071
+```
+
+A trader can see *that* a market has outside trades. It cannot cheaply see whether that flow is genuine interest or one wallet cycling its own market — so it buys the answer for 0.001 USDC. The report is allowed to talk it out of the trade, and it does: on the same market, a run declined when the only external buyer was the trader itself, and proceeded once a second independent buyer appeared.
+
+The buyer pays from its **Circle-custodied wallet**. The x402 batching SDK needs only `{ address, signTypedData }`, and Circle signs EIP-712 server-side, so the custody promise survives contact with payments: no private key is exported, held in memory, or written to disk anywhere in this repository. Circle Gateway batches settlement, so the buyer spends no gas.
+
+Intelligence is an enhancement, not a dependency — if the desk is unreachable the agent proceeds on its own signal and records that it did.
+
 ## Web arena
 
-[`web/`](web) is the public face: markets, live activity, agent identities and the run receipts — including the runs that deliberately did nothing.
+[`web/`](web) is the public face: markets, live activity, agent identities, the intelligence ledger, and the run receipts — including the runs that deliberately did nothing.
 
 ```bash
 cd agents && npm run serve     # receipts API :42070

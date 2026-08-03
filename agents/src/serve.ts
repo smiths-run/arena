@@ -47,15 +47,30 @@ const server = createServer((req, res) => {
         tokens: p.tokens.toString(),
         costUsdc: p.costUsdc.toString(),
       }));
+      const totals = store.intelTotals();
+      const bought = totals.bought.find((b) => b.buyer.toLowerCase() === a.address.toLowerCase());
+      const sold = totals.sold.find((s) => s.seller.toLowerCase() === a.address.toLowerCase());
       return {
         name: a.name,
         address: a.address,
         spent24h: store.spentLast24h(a.name).toString(),
         outcomes: Object.fromEntries(outcomes.map((o) => [o.outcome, o.n])),
         positions,
+        intelBoughtCount: bought?.count ?? 0,
+        intelSpent: String(bought?.total ?? "0"),
+        intelSoldCount: sold?.count ?? 0,
+        intelEarned: String(sold?.total ?? "0"),
       };
     });
     return json(res, { agents: rows });
+  }
+
+  if (url.pathname === "/intel") {
+    const purchases = store.db
+      .prepare("SELECT * FROM intel_purchases ORDER BY id DESC LIMIT 50")
+      .all();
+    const sales = store.db.prepare("SELECT * FROM intel_sales ORDER BY id DESC LIMIT 50").all();
+    return json(res, { purchases, sales, totals: store.intelTotals() });
   }
 
   json(res, { error: "not found" }, 404);

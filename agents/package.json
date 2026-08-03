@@ -10,15 +10,22 @@
     "typecheck": "tsc --noEmit",
     "once": "node src/orchestrator.ts --once",
     "orchestrate": "node src/orchestrator.ts",
-    "test": "node --test src/policy.test.ts",
-    "serve": "node src/serve.ts"
+    "test": "node --test src/policy.test.ts src/report.test.ts",
+    "serve": "node src/serve.ts",
+    "analyst": "node src/analyst.ts"
   },
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.8.0",
+    "@circle-fin/x402-batching": "^3.2.0",
+    "@x402/core": "^2.20.0",
+    "@x402/evm": "^2.20.0",
+    "@x402/fetch": "^2.20.0",
     "dotenv": "^17.2.3",
+    "express": "^5.2.1",
     "viem": "^2.55.10"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^26.1.2",
     "typescript": "^5.9.3"
   }

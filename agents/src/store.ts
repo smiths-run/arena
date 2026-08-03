@@ -59,6 +59,40 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS spends_agent ON spends(agent, at);
 `);
 
+// Additive migrations: columns that arrived after the first release.
+const runCols = new Set(
+  (db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((c) => c.name),
+);
+for (const [col, type] of [
+  ["intel_cost", "TEXT"],
+  ["intel_verdict", "TEXT"],
+  ["intel_market", "TEXT"],
+] as const) {
+  if (!runCols.has(col)) db.exec(`ALTER TABLE runs ADD COLUMN ${col} ${type}`);
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS intel_purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER,
+    buyer TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    cost_usdc TEXT NOT NULL,
+    verdict TEXT,
+    settlement_ref TEXT,
+    at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS intel_sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller TEXT NOT NULL,
+    payer TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    amount_usdc TEXT NOT NULL,
+    settlement_ref TEXT,
+    at INTEGER NOT NULL
+  );
+`);
+
 // ── runs ────────────────────────────────────────────────────────────────────
 
 export function startRun(agent: string, trigger: string): number {
@@ -71,10 +105,20 @@ export function startRun(agent: string, trigger: string): number {
 export function finishRun(
   id: number,
   outcome: "acted" | "skipped" | "rejected" | "error",
-  fields: { actionKind?: string; reason?: string; txHash?: string; usdc?: bigint; marketId?: bigint },
+  fields: {
+    actionKind?: string;
+    reason?: string;
+    txHash?: string;
+    usdc?: bigint;
+    marketId?: bigint;
+    intelCost?: bigint;
+    intelVerdict?: string;
+    intelMarket?: bigint;
+  },
 ): void {
   db.prepare(
-    `UPDATE runs SET finished_at = ?, outcome = ?, action_kind = ?, reason = ?, tx_hash = ?, usdc = ?, market_id = ?
+    `UPDATE runs SET finished_at = ?, outcome = ?, action_kind = ?, reason = ?, tx_hash = ?, usdc = ?, market_id = ?,
+       intel_cost = ?, intel_verdict = ?, intel_market = ?
      WHERE id = ?`,
   ).run(
     Date.now(),
@@ -84,8 +128,70 @@ export function finishRun(
     fields.txHash ?? null,
     fields.usdc?.toString() ?? null,
     fields.marketId?.toString() ?? null,
+    fields.intelCost?.toString() ?? null,
+    fields.intelVerdict ?? null,
+    fields.intelMarket?.toString() ?? null,
     id,
   );
+}
+
+export function intelPurchaseRecord(fields: {
+  runId: number | null;
+  buyer: string;
+  marketId: bigint;
+  costUsdc: bigint;
+  verdict: string | null;
+  settlementRef: string | null;
+}): void {
+  db.prepare(
+    `INSERT INTO intel_purchases (run_id, buyer, market_id, cost_usdc, verdict, settlement_ref, at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    fields.runId,
+    fields.buyer,
+    fields.marketId.toString(),
+    fields.costUsdc.toString(),
+    fields.verdict,
+    fields.settlementRef,
+    Date.now(),
+  );
+}
+
+export function intelSaleRecord(fields: {
+  seller: string;
+  payer: string;
+  marketId: string;
+  amountUsdc: bigint;
+  settlementRef: string | null;
+}): void {
+  db.prepare(
+    `INSERT INTO intel_sales (seller, payer, market_id, amount_usdc, settlement_ref, at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    fields.seller,
+    fields.payer,
+    fields.marketId,
+    fields.amountUsdc.toString(),
+    fields.settlementRef,
+    Date.now(),
+  );
+}
+
+export function intelTotals(): {
+  bought: Array<{ buyer: string; count: number; total: string }>;
+  sold: Array<{ seller: string; count: number; total: string }>;
+} {
+  const bought = db
+    .prepare(
+      "SELECT buyer, COUNT(*) count, SUM(CAST(cost_usdc AS INTEGER)) total FROM intel_purchases GROUP BY buyer",
+    )
+    .all() as never;
+  const sold = db
+    .prepare(
+      "SELECT seller, COUNT(*) count, SUM(CAST(amount_usdc AS INTEGER)) total FROM intel_sales GROUP BY seller",
+    )
+    .all() as never;
+  return { bought, sold };
 }
 
 export function recentRuns(limit = 20): unknown[] {

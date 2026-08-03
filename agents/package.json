@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "once": "node src/orchestrator.ts --once",
     "orchestrate": "node src/orchestrator.ts",
-    "test": "node --test src/policy.test.ts"
+    "test": "node --test src/policy.test.ts",
+    "serve": "node src/serve.ts"
   },
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.8.0",

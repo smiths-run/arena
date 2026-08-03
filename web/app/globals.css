@@ -1,0 +1,248 @@
+/* Smiths Run — the deck's editorial language, carried to the product.
+   Bone ground, ink text, one blue. Cards are white with hairline borders. */
+
+:root {
+  --bg: #f6f3ea;
+  --ink: #121923;
+  --body: #3a3f47;
+  --muted: #6e7378;
+  --hair: #ddd8cb;
+  --card: #ffffff;
+  --blue: #2b56d9;
+  --green: #19936c;
+  --red: #c9524e;
+  --mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.shell {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 24px 64px;
+}
+
+/* ── header ─────────────────────────────────────────── */
+
+.top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 22px 0 18px;
+  border-bottom: 1px solid var(--hair);
+  margin-bottom: 28px;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+.brand span {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+  margin-left: 10px;
+}
+
+nav.tabs {
+  display: flex;
+  gap: 22px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+nav.tabs a.active {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+nav.tabs a:hover {
+  color: var(--ink);
+}
+
+/* ── type ───────────────────────────────────────────── */
+
+.kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--blue);
+  text-transform: uppercase;
+}
+
+h1 {
+  font-size: 26px;
+  letter-spacing: -0.01em;
+  margin: 6px 0 4px;
+}
+
+.lede {
+  color: var(--muted);
+  font-size: 13.5px;
+  max-width: 60ch;
+}
+
+h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.pos { color: var(--green); font-weight: 600; }
+.neg { color: var(--red); font-weight: 600; }
+.blue { color: var(--blue); font-weight: 600; }
+.dim { color: var(--muted); }
+
+/* ── layout pieces ──────────────────────────────────── */
+
+.counters {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin: 26px 0 30px;
+}
+
+.counter {
+  background: var(--card);
+  border: 1px solid var(--hair);
+  padding: 16px 18px;
+}
+
+.counter .value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--blue);
+  font-variant-numeric: tabular-nums;
+}
+
+.counter .label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 26px;
+  align-items: start;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--hair);
+  padding: 18px 20px;
+}
+
+section {
+  margin-bottom: 30px;
+}
+
+/* ── tables ─────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 10px 8px 0;
+  border-bottom: 1px solid var(--hair);
+}
+
+td {
+  padding: 9px 10px 9px 0;
+  border-bottom: 1px solid var(--hair);
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr.rowlink:hover td {
+  background: #fbfaf5;
+  cursor: pointer;
+}
+
+td .sub {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-top: 2px;
+}
+
+/* ── badges ─────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.badge.acted { background: #e3f2ec; color: var(--green); }
+.badge.skipped { background: #eef0f3; color: var(--muted); }
+.badge.rejected { background: #fbeae9; color: var(--red); }
+.badge.error { background: #fbeae9; color: var(--red); }
+.badge.buy { background: #e3f2ec; color: var(--green); }
+.badge.sell { background: #fbeae9; color: var(--red); }
+.badge.launch { background: #e7edfb; color: var(--blue); }
+
+.reason {
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 52ch;
+}
+
+footer {
+  margin-top: 44px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair);
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@media (max-width: 860px) {
+  .counters { grid-template-columns: repeat(2, 1fr); }
+  .grid2 { grid-template-columns: 1fr; }
+}

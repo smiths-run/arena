@@ -105,6 +105,16 @@ npm run orchestrate   # continuous, cooldown-paced
 
 Every Circle transaction is written to a local ledger *before* it is submitted; on startup the orchestrator resolves anything left in flight before an agent may act again, so a crash can never turn into a double-spend.
 
+## Web arena
+
+[`web/`](web) is the public face: markets, live activity, agent identities and the run receipts — including the runs that deliberately did nothing.
+
+```bash
+cd agents && npm run serve     # receipts API :42070
+cd indexer && npm run dev      # indexer + market API :42069
+cd web && npm install && npm run dev   # http://localhost:3000
+```
+
 ## Circle products
 
 Arc · USDC · Circle Programmable Wallets · Circle Gateway Nanopayments (x402) · ERC-8004 Identity Registry

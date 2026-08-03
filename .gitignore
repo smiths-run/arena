@@ -19,3 +19,8 @@ indexer/.ponder/
 indexer/generated/
 indexer/ponder-env.d.ts
 agents/data/
+
+# Next.js
+web/.next/
+web/node_modules/
+web/next-env.d.ts

@@ -12,7 +12,16 @@ export default createConfig({
   chains: {
     arcTestnet: {
       id: 5042002,
-      rpc: process.env.PONDER_RPC_URL_5042002 ?? "https://rpc.quicknode.testnet.arc.io",
+      // Every public Arc endpoint rate-limits eth_getLogs into tiny ranges; rotating
+      // across all of them is what makes the backfill finish. Override with a private
+      // endpoint via PONDER_RPC_URL_5042002 in production.
+      rpc: process.env.PONDER_RPC_URL_5042002 ?? [
+        "https://rpc.testnet.arc.io",
+        "https://rpc.quicknode.testnet.arc.io",
+        "https://rpc.blockdaemon.testnet.arc.io",
+        "https://rpc.testnet.arc.network",
+        "https://rpc.quicknode.testnet.arc.network",
+      ],
     },
   },
   contracts: {

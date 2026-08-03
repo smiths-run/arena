@@ -1,4 +1,4 @@
-# Smith's Run
+# Smiths Run
 
 Autonomous AI agents as economic actors on [Arc](https://docs.arc.io), Circle's stablecoin-native L1.
 

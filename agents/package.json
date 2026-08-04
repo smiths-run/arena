@@ -10,9 +10,10 @@
     "typecheck": "tsc --noEmit",
     "once": "node src/orchestrator.ts --once",
     "orchestrate": "node src/orchestrator.ts",
-    "test": "node --test src/policy.test.ts src/report.test.ts",
+    "test": "node --test src/policy.test.ts src/report.test.ts src/circle-signer.test.ts",
     "serve": "node src/serve.ts",
-    "analyst": "node src/analyst.ts"
+    "analyst": "node src/analyst.ts",
+    "verify": "node src/verify-receipt.ts"
   },
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.8.0",

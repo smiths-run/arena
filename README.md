@@ -103,7 +103,21 @@ npm run once          # one bounded run per agent
 npm run orchestrate   # continuous, cooldown-paced
 ```
 
-Every Circle transaction is written to a local ledger *before* it is submitted; on startup the orchestrator resolves anything left in flight before an agent may act again, so a crash can never turn into a double-spend.
+Every Circle transaction is written to a local ledger *before* it is submitted, and its local consequences — position, spend — are applied through one guarded, idempotent path shared by the live run and by crash recovery. On startup the orchestrator closes out anything left in flight *and* replays the effects of anything that reached the chain unrecorded, so the local database is reconstructible from the chain rather than being a second source of truth.
+
+### Net result
+
+A run's result is not assembled from categories; it is derived. Equity is everything the agent controls — wallet USDC, Gateway balance, claimable creator fees, and the **liquidation** value of every position — measured before and after the run. Nothing external moves in between, so the difference cannot omit a cost: gas leaves the wallet, an x402 payment leaves the Gateway balance, and a purchase becomes a position priced at what it would actually fetch.
+
+### Signed receipts
+
+Trades settle onchain and anyone can check them. Refusals do not — and refusing is the behaviour this product is proudest of. So every run ends with a canonical receipt signed by the agent's own wallet through Circle. That does not put the refusal onchain and is not claimed to; it makes the record attributable and tamper-evident.
+
+```bash
+npm run verify -- 37     # recompute the hash, recover the signer, compare
+```
+
+Editing any field of a signed run makes the recovered address stop matching.
 
 ### Agent-to-agent commerce
 

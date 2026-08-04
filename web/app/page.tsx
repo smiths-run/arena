@@ -17,8 +17,9 @@ export default async function Arena() {
       <div className="kicker">Public arena</div>
       <h1>Autonomous agents, trading in the open.</h1>
       <p className="lede">
-        Every market, trade and refusal below is a real onchain event on Arc Testnet, attributable
-        to an agent&apos;s own wallet and identity. Nothing is simulated.
+        Every market and trade below is settled onchain on Arc Testnet, attributable to an
+        agent&apos;s own wallet and identity. Refusals are not onchain events — they are published
+        as signed agent receipts, on the Receipts page. Nothing here is simulated.
       </p>
 
       <div className="counters">

@@ -19,6 +19,8 @@ contract Handler is Test {
     uint256 public buys;
     uint256 public sells;
     uint256 public claims;
+    uint256 public donatedUsdc;
+    uint256 public donatedTokens;
 
     constructor(Markets mk_, MockUsdc6 usdc_, address[] memory actors_) {
         mk = mk_;
@@ -114,6 +116,36 @@ contract Handler is Test {
         claims++;
     }
 
+    /**
+     * Anyone can push USDC or a coin straight at the contract. Nothing in the
+     * protocol invites it, which is exactly why the invariants have to survive
+     * it: an equality that a stranger can break with a transfer is not a
+     * solvency property, it is a coincidence.
+     */
+    function donateUsdc(uint256 amount) external {
+        uint256 gift = bound(amount, 1, 5e6);
+        address a = _actor(gift);
+        if (usdc.balanceOf(a) < gift) return;
+        vm.prank(a);
+        usdc.transfer(address(mk), gift);
+        donatedUsdc += gift;
+    }
+
+    function donateTokens(uint256 marketSeed, uint256 actorSeed, uint256 amount) external {
+        uint256 n = mk.marketCount();
+        if (n == 0) return;
+        address a = _actor(actorSeed);
+        uint256 id = marketSeed % n;
+        (address t,,,,,) = mk.markets(id);
+        CoinToken token = CoinToken(t);
+        uint256 held = token.balanceOf(a);
+        if (held == 0) return;
+        uint256 gift = bound(amount, 1, held);
+        vm.prank(a);
+        token.transfer(address(mk), gift);
+        donatedTokens++;
+    }
+
     function claimProtocol() external {
         if (mk.protocolFees() == 0) return;
         vm.prank(mk.treasury());
@@ -149,12 +181,14 @@ contract MarketsInvariantTest is Test {
         handler = new Handler(mk, usdc, actors);
         targetContract(address(handler));
 
-        bytes4[] memory selectors = new bytes4[](5);
+        bytes4[] memory selectors = new bytes4[](7);
         selectors[0] = Handler.launch.selector;
         selectors[1] = Handler.buy.selector;
         selectors[2] = Handler.sell.selector;
         selectors[3] = Handler.claimCreator.selector;
         selectors[4] = Handler.claimProtocol.selector;
+        selectors[5] = Handler.donateUsdc.selector;
+        selectors[6] = Handler.donateTokens.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
 
         // Seed one market so trading is reachable from the first call.
@@ -162,24 +196,53 @@ contract MarketsInvariantTest is Test {
         mk.launch("Genesis", "GEN", 1e6);
     }
 
-    /// @notice Solvency. Everything the contract holds is either curve reserve or a fee
-    ///         somebody has not claimed yet — never less, and never unaccounted more.
-    function invariant_UsdcHeldEqualsBooks() public view {
-        assertEq(
+    /// @notice Solvency. The contract must hold at least what it owes — curve
+    ///         reserves plus every fee nobody has claimed yet.
+    /// @dev Deliberately `>=` rather than `==`. Anyone can transfer USDC straight to
+    ///      the contract, and an equality that a stranger can break by being generous
+    ///      is not a solvency property. What matters is that the books are never
+    ///      short; surplus is tracked separately below.
+    function invariant_UsdcCoversLiabilities() public view {
+        assertGe(
             usdc.balanceOf(address(mk)),
             mk.expectedUsdcBalance(),
-            "usdc held must equal curve reserves plus unclaimed fees"
+            "usdc held must cover curve reserves plus unclaimed fees"
         );
     }
 
-    /// @notice The virtual token reserve is not merely bookkeeping: the contract really
-    ///         holds every coin it has not sold.
-    function invariant_TokenReserveIsRealBalance() public view {
+    /// @notice Any surplus is exactly what was donated — the protocol itself never
+    ///         creates or loses a unit it has not accounted for.
+    function invariant_SurplusIsOnlyDonations() public view {
+        uint256 held = usdc.balanceOf(address(mk));
+        uint256 owed = mk.expectedUsdcBalance();
+        assertEq(held - owed, handler.donatedUsdc(), "unexplained surplus or shortfall");
+    }
+
+    /// @notice The constant product of every curve is non-decreasing.
+    /// @dev The strongest economic statement available here: k is preserved exactly in
+    ///      real arithmetic and rounding only ever pushes it up, so the reserve can
+    ///      always honour the coins outstanding against it. A leak would show as k
+    ///      falling below where the curve started.
+    function invariant_ConstantProductNeverFalls() public view {
+        uint256 n = mk.marketCount();
+        uint256 floorK = mk.VIRTUAL_USDC() * mk.TOKEN_SUPPLY();
+        for (uint256 i; i < n; ++i) {
+            (,, uint256 rU, uint256 rT,,) = mk.markets(i);
+            assertGe(rU * rT, floorK, "constant product fell below its starting value");
+        }
+    }
+
+    /// @notice The contract really holds every coin it has not sold.
+    /// @dev `>=` for the same reason as the USDC invariant: anyone can transfer a coin
+    ///      to the market address, and that must not be able to falsify solvency.
+    function invariant_TokenReserveIsBacked() public view {
         uint256 n = mk.marketCount();
         for (uint256 i; i < n; ++i) {
             (address t,,, uint256 rT,,) = mk.markets(i);
-            assertEq(
-                CoinToken(t).balanceOf(address(mk)), rT, "token reserve must match the real balance"
+            assertGe(
+                CoinToken(t).balanceOf(address(mk)),
+                rT,
+                "token reserve must be backed by the real balance"
             );
         }
     }
@@ -198,5 +261,6 @@ contract MarketsInvariantTest is Test {
         console2.log("buys    ", handler.buys());
         console2.log("sells   ", handler.sells());
         console2.log("claims  ", handler.claims());
+        console2.log("donations", handler.donatedUsdc());
     }
 }

@@ -14,7 +14,7 @@ import { registerBatchScheme } from "@circle-fin/x402-batching/client";
 import type { Report } from "./report.ts";
 import { circleSigner } from "./circle-signer.ts";
 import { gatewayAvailable, gatewayDeposit } from "./gateway.ts";
-import type { circle } from "./shared.ts";
+import { AGENTS, type circle } from "./shared.ts";
 import * as store from "./store.ts";
 
 const ANALYST_URL = process.env.ANALYST_URL ?? "http://localhost:42071";
@@ -28,6 +28,16 @@ export interface Agent {
   name: string;
   walletId: string;
   address: `0x${string}`;
+}
+
+/** Analyst desks this agent is permitted to pay. */
+function payeeAllowlist(): Set<string> {
+  const bellows = AGENTS.find((a) => a.name === "bellows");
+  const extra = (process.env.INTEL_PAYEE_ALLOWLIST ?? "")
+    .split(",")
+    .map((a) => a.trim().toLowerCase())
+    .filter(Boolean);
+  return new Set([...(bellows ? [bellows.address.toLowerCase()] : []), ...extra]);
 }
 
 export interface PurchasedIntel {
@@ -89,8 +99,14 @@ export async function buyReport(
   agent: Agent,
   marketId: bigint,
   runId: number | null,
+  maxCostUsdc: bigint,
 ): Promise<PurchasedIntel> {
-  const signer = circleSigner(client, agent.walletId, agent.address);
+  // The mandate is what makes the custody promise mean something: the wallet will
+  // sign this payment and refuse anything else, including a larger one.
+  const signer = circleSigner(client, agent.walletId, agent.address, {
+    maxValueUsdc: maxCostUsdc,
+    payeeAllowlist: payeeAllowlist(),
+  });
 
   const x402 = new x402Client();
   registerBatchScheme(x402, { signer, networks: [ARC_TESTNET_CAIP2] });
@@ -109,6 +125,7 @@ export async function buyReport(
   // charged, rather than trusting the price it expected to pay.
   let settlementRef: string | null = null;
   let costUsdc = 1_000n; // the desk's posted price, unless settlement says otherwise
+
   const header = res.headers.get("payment-response");
   if (header) {
     try {
@@ -118,6 +135,13 @@ export async function buyReport(
       };
       settlementRef = settled.transaction ?? null;
       if (settled.amount) costUsdc = BigInt(settled.amount);
+      if (costUsdc > maxCostUsdc) {
+        // The signature guard already refuses an over-cap authorization, so this
+        // should be unreachable. Recording it loudly beats trusting that.
+        throw new Error(
+          `analyst settled ${costUsdc} against a cap of ${maxCostUsdc} — signature guard bypassed?`,
+        );
+      }
     } catch {
       settlementRef = header.slice(0, 64);
     }

@@ -20,14 +20,27 @@ import {CoinToken} from "./CoinToken.sol";
 ///
 ///          usdcBalance == Σ (reserveUsdc − VIRTUAL_USDC) + unclaimed creator and protocol fees
 ///
-/// @dev Price impact. With fee-on-input the execution impact of a buy has a closed form:
+/// @dev Price impact. With fee-on-input the *execution* impact of a buy has a closed form:
 ///
 ///          effective price   = netIn / tokensOut
 ///          spot price        = reserveUsdc / reserveToken
 ///          impact            = netIn / reserveUsdc
 ///
-///      so the ceiling is a single integer comparison rather than a square root. The sell
-///      side is symmetric: impact = tokensIn / reserveToken.
+///      so the ceiling is a single integer comparison rather than a square root.
+///
+///      Two things this deliberately does not claim:
+///
+///      1. Execution impact is not the post-trade spot move. A trade filled 5% above
+///         mid leaves the spot price (1 + 0.05)^2 - 1 = 10.25% higher, because the
+///         curve moves on both sides. What is capped here is the price the trader
+///         actually pays, not where the market ends up.
+///
+///      2. The sell side is close to symmetric but not exactly. Its true execution
+///         impact is tokensIn / (reserveToken + tokensIn); the check below uses
+///         tokensIn / reserveToken, which is strictly larger. That makes the ceiling
+///         bind slightly earlier than it needs to — conservative in the protocol's
+///         favour, and cheaper by one addition. The difference is bounded by the
+///         ceiling itself: at 5% it is under a quarter of a percent.
 contract Markets {
     // ─────────────────────────────────────────────────────────── constants
 
@@ -217,6 +230,8 @@ contract Markets {
         Market storage m = _market(id);
         if (tokensIn == 0) revert ZeroAmount();
 
+        // Conservative by construction: the exact figure is tokensIn / (reserveToken +
+        // tokensIn), so this over-states impact slightly and never under-states it.
         uint256 impactBps = (tokensIn * BPS) / m.reserveToken;
         if (impactBps > MAX_IMPACT_BPS) revert ImpactTooHigh(impactBps);
 

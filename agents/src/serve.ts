@@ -60,9 +60,14 @@ const server = createServer((req, res) => {
         intelSpent: String(bought?.total ?? "0"),
         intelSoldCount: sold?.count ?? 0,
         intelEarned: String(sold?.total ?? "0"),
+        netResult: store.netResultByAgent().find((n) => n.agent === a.name)?.net ?? "0",
       };
     });
     return json(res, { agents: rows });
+  }
+
+  if (url.pathname === "/net-result") {
+    return json(res, { agents: store.netResultByAgent() });
   }
 
   if (url.pathname === "/intel") {

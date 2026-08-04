@@ -33,6 +33,15 @@ export type Verdict = { ok: true } | { ok: false; reason: string };
 const HARD_IMPACT_BPS = 500n;
 const HARD_MAX_TRADE = 5_000_000n;
 
+/**
+ * Headroom kept back for the transaction's own gas. Arc denominates gas in USDC,
+ * and a measured contract call costs about 0.0018 USDC — so an action that spends
+ * the reserve down to the last unit leaves the agent unable to pay for the very
+ * transaction that spends it, or for the exit afterwards. Ten times the measured
+ * cost is cheap insurance against a fee spike.
+ */
+const GAS_HEADROOM_USDC = 20_000n; // 0.02 USDC
+
 export function evaluate(action: Action, strategy: Strategy, obs: Observation): Verdict {
   if (action.kind === "skip") return { ok: true };
 
@@ -55,10 +64,13 @@ export function evaluate(action: Action, strategy: Strategy, obs: Observation): 
         reason: `daily cap: spent ${obs.spent24h} + ${spend} exceeds ${strategy.dailySpendUsdc}`,
       };
     }
-    if (obs.balanceUsdc < spend + strategy.operatingReserveUsdc) {
+    const needed = spend + strategy.operatingReserveUsdc + GAS_HEADROOM_USDC;
+    if (obs.balanceUsdc < needed) {
       return {
         ok: false,
-        reason: `reserve: balance ${obs.balanceUsdc} cannot cover ${spend} plus reserve ${strategy.operatingReserveUsdc}`,
+        reason:
+          `reserve: balance ${obs.balanceUsdc} cannot cover ${spend} plus reserve ` +
+          `${strategy.operatingReserveUsdc} plus ${GAS_HEADROOM_USDC} gas headroom`,
       };
     }
   }

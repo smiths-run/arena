@@ -6,17 +6,12 @@
  * found at startup and resolved against Circle before the agent may act again —
  * an agent can never repeat a payment because the record of it was lost.
  */
-import { parseAbi, decodeEventLog } from "viem";
+import { parseAbi } from "viem";
 import type { Action } from "./policy.ts";
 import { MARKETS, USDC, circle, idempotencyKey } from "./shared.ts";
+import { applyEffects } from "./effects.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
-
-const marketsEventsAbi = parseAbi([
-  "event MarketLaunched(uint256 indexed id, address indexed token, address indexed creator, string name, string symbol, uint256 initialBuy)",
-  "event Bought(uint256 indexed id, address indexed buyer, uint256 usdcIn, uint256 tokensOut, uint256 impactBps, uint256 reserveUsdc, uint256 reserveToken)",
-  "event Sold(uint256 indexed id, address indexed seller, uint256 tokensIn, uint256 usdcOut, uint256 impactBps, uint256 reserveUsdc, uint256 reserveToken)",
-]);
 
 const allowanceAbi = parseAbi(["function allowance(address, address) view returns (uint256)"]);
 
@@ -37,9 +32,15 @@ export async function submit(
   abiFunctionSignature: string,
   abiParameters: unknown[],
   idem: (string | number)[],
+  runId: number | null = null,
 ): Promise<string> {
-  const key = idempotencyKey(...idem);
-  store.pendingCreate(key, agent.name, purpose);
+  // The logical key names the *action*; the idempotency key names this *attempt*
+  // at it. Circle replays the original outcome for a repeated key, so a retry
+  // after a terminal failure needs a new one — derived from how many attempts
+  // have already failed, so it stays deterministic across a replayed run.
+  const logicalKey = idem.join(":");
+  const key = idempotencyKey(logicalKey, store.failedAttempts(logicalKey));
+  store.pendingCreate(key, agent.name, purpose, logicalKey, runId);
 
   const created = await client.createContractExecutionTransaction({
     walletId: agent.walletId,
@@ -61,6 +62,10 @@ export async function submit(
   if (tx?.state !== "COMPLETE") {
     throw new Error(`${purpose}: circle tx ended ${tx?.state} (${tx?.errorReason ?? "no reason"})`);
   }
+
+  // Write the local consequences here, inside the same guarded path recovery
+  // uses, so a crash after this point cannot leave the ledger behind the chain.
+  await applyEffects(key, agent.name, tx.txHash as `0x${string}`);
   return tx.txHash!;
 }
 
@@ -79,7 +84,7 @@ async function ensureUsdcAllowance(client: Circle, agent: AgentHandle, need: big
     USDC,
     "approve(address,uint256)",
     [MARKETS, "100000000"],
-    ["approve", agent.address, MARKETS, Date.now()],
+    ["approve", agent.address, MARKETS],
   );
 }
 
@@ -104,7 +109,7 @@ async function ensureTokenAllowance(
     "approve(address,uint256)",
     // Effectively unbounded for this token; the market only pulls what a sell passes.
     ["115792089237316195423570985008687907853269984665640564039457584007913129639935"],
-    ["approve-token", agent.address, token, Date.now()],
+    ["approve-token", agent.address, token],
   );
 }
 
@@ -134,10 +139,8 @@ export async function execute(
       "buy(uint256,uint256,uint256)",
       [action.marketId.toString(), action.usdcIn.toString(), ((tokensOut * 99n) / 100n).toString()],
       ["buy", agent.address, runId],
+      runId,
     );
-    const { tokens } = await settled(txHash, "Bought");
-    store.positionAdd(agent.name, action.marketId, tokens, action.usdcIn);
-    store.spendRecord(agent.name, action.usdcIn);
     return { txHash, usdcMoved: action.usdcIn, marketId: action.marketId };
   }
 
@@ -153,8 +156,8 @@ export async function execute(
       "sell(uint256,uint256,uint256)",
       [action.marketId.toString(), action.tokens.toString(), ((usdcOut * 99n) / 100n).toString()],
       ["sell", agent.address, runId],
+      runId,
     );
-    store.positionReduce(agent.name, action.marketId, action.tokens);
     return { txHash, usdcMoved: usdcOut, marketId: action.marketId };
   }
 
@@ -168,45 +171,17 @@ export async function execute(
     "launch(string,string,uint256)",
     [action.name, action.symbol, action.initialBuy.toString()],
     ["launch", agent.address, action.symbol],
+    runId,
   );
-  const { marketId, tokens } = await settledLaunch(txHash);
-  store.positionAdd(agent.name, marketId, tokens, action.initialBuy);
-  store.spendRecord(agent.name, action.initialBuy);
-  return { txHash, usdcMoved: action.initialBuy, marketId };
-}
-
-/** Read the receipt back for the exact tokens a buy produced. */
-async function settled(txHash: string, wanted: "Bought" | "Sold"): Promise<{ tokens: bigint }> {
-  const receipt = await obs.pub.waitForTransactionReceipt({ hash: txHash as `0x${string}` });
-  for (const log of receipt.logs) {
-    if (log.address.toLowerCase() !== MARKETS.toLowerCase()) continue;
-    try {
-      const d = decodeEventLog({ abi: marketsEventsAbi, data: log.data, topics: log.topics });
-      if (d.eventName === "Bought" && wanted === "Bought") return { tokens: d.args.tokensOut };
-      if (d.eventName === "Sold" && wanted === "Sold") return { tokens: d.args.tokensIn };
-    } catch {
-      /* not one of ours */
-    }
-  }
-  throw new Error(`no ${wanted} event in ${txHash}`);
-}
-
-async function settledLaunch(txHash: string): Promise<{ marketId: bigint; tokens: bigint }> {
-  const receipt = await obs.pub.waitForTransactionReceipt({ hash: txHash as `0x${string}` });
-  let marketId: bigint | null = null;
-  let tokens = 0n;
-  for (const log of receipt.logs) {
-    if (log.address.toLowerCase() !== MARKETS.toLowerCase()) continue;
-    try {
-      const d = decodeEventLog({ abi: marketsEventsAbi, data: log.data, topics: log.topics });
-      if (d.eventName === "MarketLaunched") marketId = d.args.id;
-      if (d.eventName === "Bought") tokens = d.args.tokensOut;
-    } catch {
-      /* not one of ours */
-    }
-  }
+  const { marketId } = await applyEffects(
+    idempotencyKey(["launch", agent.address, action.symbol].join(":"), store.failedAttempts(
+      ["launch", agent.address, action.symbol].join(":"),
+    )),
+    agent.name,
+    txHash as `0x${string}`,
+  );
   if (marketId === null) throw new Error(`no MarketLaunched event in ${txHash}`);
-  return { marketId, tokens };
+  return { txHash, usdcMoved: action.initialBuy, marketId };
 }
 
 async function marketToken(marketId: bigint): Promise<`0x${string}`> {
@@ -222,13 +197,22 @@ async function marketToken(marketId: bigint): Promise<`0x${string}`> {
   return token;
 }
 
-/** Startup pass: resolve every non-terminal Circle transaction before agents act. */
-export async function reconcile(client: Circle): Promise<number> {
+/**
+ * Startup pass. Two jobs, and the second is the one that matters.
+ *
+ * First, close out every Circle transaction still in a non-terminal state. Second
+ * — and this is the window a naive reconciler misses — replay the local side
+ * effects of anything that reached the chain while nobody was recording. A
+ * transaction can be COMPLETE onchain and still be missing from the position and
+ * spend ledger, and an agent that wakes up in that state would let the policy
+ * engine judge on numbers that are quietly wrong.
+ */
+export async function reconcile(client: Circle): Promise<{ closed: number; replayed: number }> {
   const rows = store.unresolvedPending();
   for (const row of rows) {
     if (!row.circle_tx_id) {
-      // Created but never submitted — the idempotency key guarantees a retry of the
-      // same action cannot double-spend, so the row is safely closed as failed.
+      // Created but never submitted. A retry gets a fresh attempt number, so
+      // closing this as failed cannot cause a double-spend.
       store.pendingTerminal(row.idempotency_key, "FAILED", null);
       continue;
     }
@@ -240,5 +224,11 @@ export async function reconcile(client: Circle): Promise<number> {
     }
     // Still in flight → leave it; the orchestrator holds that agent until resolved.
   }
-  return rows.length;
+
+  let replayed = 0;
+  for (const row of store.completedButUnapplied()) {
+    await applyEffects(row.idempotency_key, row.agent, row.tx_hash as `0x${string}`);
+    replayed++;
+  }
+  return { closed: rows.length, replayed };
 }

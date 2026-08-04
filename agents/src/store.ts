@@ -67,8 +67,41 @@ for (const [col, type] of [
   ["intel_cost", "TEXT"],
   ["intel_verdict", "TEXT"],
   ["intel_market", "TEXT"],
+  // Equity in 6-decimal USDC at the two ends of the run. The difference is the
+  // run's net result with nothing left out — see equity.ts for why it is derived
+  // rather than assembled from categories.
+  ["equity_open", "TEXT"],
+  ["equity_close", "TEXT"],
+  ["equity_open_detail", "TEXT"],
+  ["equity_close_detail", "TEXT"],
+  ["receipt_hash", "TEXT"],
+  ["receipt_signature", "TEXT"],
 ] as const) {
   if (!runCols.has(col)) db.exec(`ALTER TABLE runs ADD COLUMN ${col} ${type}`);
+}
+
+const pendingCols = new Set(
+  (db.prepare("PRAGMA table_info(pending_tx)").all() as Array<{ name: string }>).map((c) => c.name),
+);
+for (const [col, type] of [
+  // Set once the transaction's local side effects (position, spend) have been
+  // written. Both the live path and the crash-recovery path check it, so effects
+  // are applied exactly once no matter which of them gets there first.
+  ["applied", "INTEGER NOT NULL DEFAULT 0"],
+  // The action this transaction represents, independent of which attempt it was.
+  ["logical_key", "TEXT"],
+  ["agent_name", "TEXT"],
+  ["run_id", "INTEGER"],
+] as const) {
+  if (!pendingCols.has(col)) db.exec(`ALTER TABLE pending_tx ADD COLUMN ${col} ${type}`);
+}
+
+if (!pendingCols.has("applied")) {
+  // Rows that were already terminal when this column arrived had their effects
+  // written by the previous code path. Leaving them at the default of 0 would
+  // make the first reconciliation replay every historical transaction and double
+  // every position, so they are backfilled as applied.
+  db.exec("UPDATE pending_tx SET applied = 1 WHERE state = 'COMPLETE'");
 }
 
 db.exec(`
@@ -94,6 +127,47 @@ db.exec(`
 `);
 
 // ── runs ────────────────────────────────────────────────────────────────────
+
+export function recordReceipt(runId: number, hash: string, signature: string): void {
+  db.prepare("UPDATE runs SET receipt_hash = ?, receipt_signature = ? WHERE id = ?").run(
+    hash,
+    signature,
+    runId,
+  );
+}
+
+export function runById(runId: number): Record<string, unknown> | undefined {
+  return db.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as never;
+}
+
+export function recordEquity(
+  runId: number,
+  which: "open" | "close",
+  total: bigint,
+  detail: unknown,
+): void {
+  const col = which === "open" ? "equity_open" : "equity_close";
+  const detailCol = which === "open" ? "equity_open_detail" : "equity_close_detail";
+  db.prepare(`UPDATE runs SET ${col} = ?, ${detailCol} = ? WHERE id = ?`).run(
+    total.toString(),
+    JSON.stringify(detail, (_k, v) => (typeof v === "bigint" ? v.toString() : v)),
+    runId,
+  );
+}
+
+/** Lifetime net result per agent: the sum of every completed run's equity delta. */
+export function netResultByAgent(): Array<{ agent: string; runs: number; net: string }> {
+  const rows = db
+    .prepare(
+      `SELECT agent, COUNT(*) runs,
+              SUM(CAST(equity_close AS INTEGER) - CAST(equity_open AS INTEGER)) net
+       FROM runs
+       WHERE equity_open IS NOT NULL AND equity_close IS NOT NULL
+       GROUP BY agent`,
+    )
+    .all() as Array<{ agent: string; runs: number; net: number | null }>;
+  return rows.map((r) => ({ agent: r.agent, runs: r.runs, net: String(r.net ?? 0) }));
+}
 
 export function startRun(agent: string, trigger: string): number {
   const r = db
@@ -207,11 +281,62 @@ export function lastRunAt(agent: string): number {
 
 // ── pending transactions (reconciliation) ──────────────────────────────────
 
-export function pendingCreate(key: string, agent: string, purpose: string): void {
+export function pendingCreate(
+  key: string,
+  agent: string,
+  purpose: string,
+  logicalKey: string,
+  runId: number | null,
+): void {
   db.prepare(
-    `INSERT OR IGNORE INTO pending_tx (idempotency_key, agent, purpose, state, updated_at)
-     VALUES (?, ?, ?, 'created', ?)`,
-  ).run(key, agent, purpose, Date.now());
+    `INSERT OR IGNORE INTO pending_tx (idempotency_key, agent, purpose, state, updated_at, logical_key, run_id)
+     VALUES (?, ?, ?, 'created', ?, ?, ?)`,
+  ).run(key, agent, purpose, Date.now(), logicalKey, runId);
+}
+
+/**
+ * How many times this exact action has already ended in a terminal failure.
+ *
+ * Retries need a fresh idempotency key — Circle replays the original outcome for
+ * a repeated key, so a failed attempt would stay failed forever. Deriving the
+ * attempt number from the ledger rather than the clock keeps the key
+ * deterministic: the same action after the same history always produces the same
+ * key, which is what makes a replayed run safe.
+ */
+export function failedAttempts(logicalKey: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) n FROM pending_tx
+       WHERE logical_key = ? AND state IN ('FAILED','DENIED','CANCELLED')`,
+    )
+    .get(logicalKey) as { n: number };
+  return row.n;
+}
+
+export function isApplied(key: string): boolean {
+  const row = db
+    .prepare("SELECT applied FROM pending_tx WHERE idempotency_key = ?")
+    .get(key) as { applied: number } | undefined;
+  return row?.applied === 1;
+}
+
+export function markApplied(key: string): void {
+  db.prepare("UPDATE pending_tx SET applied = 1 WHERE idempotency_key = ?").run(key);
+}
+
+/** Completed transactions whose local side effects were never written. */
+export function completedButUnapplied(): Array<{
+  idempotency_key: string;
+  agent: string;
+  purpose: string;
+  tx_hash: string | null;
+}> {
+  return db
+    .prepare(
+      `SELECT idempotency_key, agent, purpose, tx_hash FROM pending_tx
+       WHERE state = 'COMPLETE' AND applied = 0 AND tx_hash IS NOT NULL`,
+    )
+    .all() as never;
 }
 
 export function pendingSubmitted(key: string, circleTxId: string): void {

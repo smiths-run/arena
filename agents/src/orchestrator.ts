@@ -14,18 +14,30 @@ import * as store from "./store.ts";
 const client = circle();
 const once = process.argv.includes("--once");
 
-const pending = await executor.reconcile(client);
-if (pending > 0) console.log(`reconciled ${pending} pending transaction(s) from a previous life`);
+const { closed, replayed } = await executor.reconcile(client);
+if (closed > 0) console.log(`reconciled ${closed} pending transaction(s) from a previous life`);
+if (replayed > 0) {
+  console.log(`replayed local effects for ${replayed} transaction(s) that reached the chain unrecorded`);
+}
 
-const stillOpen = store.unresolvedPending();
-const heldAgents = new Set(stillOpen.map((r) => r.agent));
-for (const name of heldAgents) {
-  console.log(`${name}: held — a Circle transaction is still in flight from before restart`);
+/**
+ * An agent with a transaction still in flight must not start another run — its
+ * position and spend are unknown until that one lands. Recomputed every pass
+ * rather than once at startup, so an agent is released the moment its
+ * transaction settles instead of waiting for a restart.
+ */
+function heldAgents(): Set<string> {
+  return new Set(store.unresolvedPending().map((r) => r.agent));
+}
+
+for (const name of heldAgents()) {
+  console.log(`${name}: held — a Circle transaction is still in flight`);
 }
 
 async function pass(): Promise<void> {
+  const held = heldAgents();
   for (const agent of AGENTS) {
-    if (heldAgents.has(agent.name)) continue;
+    if (held.has(agent.name)) continue;
     const cooldownMs = STRATEGIES[agent.name].cooldownSeconds * 1000;
     const since = Date.now() - store.lastRunAt(agent.name);
     if (!once && since < cooldownMs) continue;

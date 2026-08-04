@@ -15,6 +15,8 @@ import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 import * as executor from "./executor.ts";
 import * as intel from "./intel.ts";
+import { equityOf, formatEquity } from "./equity.ts";
+import { signReceipt, type ReceiptBody } from "./receipt.ts";
 
 export async function runOnce(
   agentName: string,
@@ -28,6 +30,60 @@ export async function runOnce(
 
   const runId = store.startRun(agentName, trigger);
   const log = (msg: string) => console.log(`[${agentName}#${runId}] ${msg}`);
+
+  // Equity is snapshotted around every run, including the ones that do nothing.
+  // A run that refuses to trade still burns no money and should show a net result
+  // of zero — which is only checkable if the zero was measured.
+  const opening = await equityOf(agentName, agent.address).catch(() => null);
+  if (opening) store.recordEquity(runId, "open", opening.total, opening);
+
+  const closeOut = async () => {
+    const closing = await equityOf(agentName, agent.address).catch(() => null);
+    if (closing) {
+      store.recordEquity(runId, "close", closing.total, closing);
+      if (opening) {
+        const delta = closing.total - opening.total;
+        const sign = delta >= 0n ? "+" : "";
+        log(`net ${sign}${Number(delta) / 1e6} USDC — ${formatEquity(closing)}`);
+      }
+    }
+
+    // Sign the finished run from the agent's own wallet. A refusal is not an
+    // onchain event and this does not pretend otherwise — but it makes the record
+    // attributable to the agent and tamper-evident, so a reader checks a signature
+    // instead of trusting our database.
+    try {
+      const row = store.runById(runId) as Record<string, string | null> | undefined;
+      if (!row) return;
+      const body: ReceiptBody = {
+        agent: agent.address,
+        agentName,
+        runId,
+        trigger,
+        outcome: String(row.outcome ?? "unknown"),
+        actionKind: row.action_kind ?? null,
+        reason: row.reason ?? null,
+        marketId: row.market_id ?? null,
+        txHash: row.tx_hash ?? null,
+        usdc: row.usdc ?? null,
+        intelCost: row.intel_cost ?? null,
+        intelVerdict: row.intel_verdict ?? null,
+        equityOpen: row.equity_open ?? null,
+        equityClose: row.equity_close ?? null,
+        netResult:
+          row.equity_open && row.equity_close
+            ? (BigInt(row.equity_close) - BigInt(row.equity_open)).toString()
+            : null,
+        codeVersion: process.env.CODE_VERSION ?? "dev",
+      };
+      const signed = await signReceipt(client, agent, body);
+      store.recordReceipt(runId, signed.detailsHash, signed.signature);
+    } catch (err) {
+      // An unsigned receipt is a weaker record, not a failed run. Say so rather
+      // than losing the run.
+      log(`receipt unsigned — ${err instanceof Error ? err.message : err}`);
+    }
+  };
 
   try {
     const [markets, recentTrades, balance, blockNow] = await Promise.all([
@@ -49,6 +105,7 @@ export async function runOnce(
     if (action.kind === "skip") {
       store.finishRun(runId, "skipped", { reason: action.reason });
       log(`skip — ${action.reason}`);
+      await closeOut();
       return;
     }
 
@@ -72,7 +129,13 @@ export async function runOnce(
           ),
         );
 
-        const bought = await intel.buyReport(client, agent, action.marketId, runId);
+        const bought = await intel.buyReport(
+          client,
+          agent,
+          action.marketId,
+          runId,
+          strategy.paidIntel.maxCostUsdc,
+        );
         intelCost = bought.costUsdc;
         intelVerdict = bought.report.verdict;
         store.spendRecord(agentName, bought.costUsdc);
@@ -92,6 +155,7 @@ export async function runOnce(
             intelMarket: action.marketId,
           });
           log(`skip on paid advice — ${bought.report.findings[0]}`);
+          await closeOut();
           return;
         }
       } catch (err) {
@@ -101,9 +165,14 @@ export async function runOnce(
       }
     }
 
-    // The policy engine judges with fresh numbers, not the strategist's claims.
+    // The policy engine judges with fresh numbers, not the strategist's claims —
+    // and not with a balance that pre-dates our own spending. Funding Gateway and
+    // buying a report both move USDC out of the wallet between the observation
+    // above and this decision, so the balance is read again here.
+    const balanceNow = intelCost === undefined ? balance : await obs.walletUsdc(agent.address);
+
     const observation: Observation = {
-      balanceUsdc: balance,
+      balanceUsdc: balanceNow,
       spent24h: store.spentLast24h(agentName),
       quotedImpactBps: null,
       positionTokens: 0n,
@@ -126,6 +195,7 @@ export async function runOnce(
         intelVerdict,
       });
       log(`policy rejected ${action.kind} — ${verdict.reason}`);
+      await closeOut();
       return;
     }
 
@@ -141,10 +211,12 @@ export async function runOnce(
       intelMarket: intelCost !== undefined && action.kind === "buy" ? action.marketId : undefined,
     });
     log(`acted: ${summarize(action)}  tx=${done.txHash}`);
+    await closeOut();
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     store.finishRun(runId, "error", { reason });
     log(`error — ${reason}`);
+    await closeOut();
   }
 }
 

@@ -72,6 +72,9 @@ export interface Run {
   intel_cost: string | null;
   intel_verdict: string | null;
   intel_market: string | null;
+  equity_open: string | null;
+  equity_close: string | null;
+  receipt_signature: string | null;
 }
 
 export interface Stats {
@@ -122,6 +125,8 @@ export const api = {
   agents: () => get<{ agents: AgentRow[] }>(`${INDEXER}/api/agents?limit=100`),
   runs: (limit = 60) => get<{ runs: Run[] }>(`${RECEIPTS}/runs?limit=${limit}`),
   intel: () => get<IntelLedger>(`${RECEIPTS}/intel`),
+  netResult: () =>
+    get<{ agents: Array<{ agent: string; runs: number; net: string }> }>(`${RECEIPTS}/net-result`),
 };
 
 // ── formatting ──────────────────────────────────────────────────────────────
@@ -137,6 +142,14 @@ export function usdc(base: string | bigint | null | undefined): string {
 
 export function short(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+/** Signed 6-decimal amount, with the sign kept — a net result of zero is meaningful. */
+export function signedUsdc(base: string | null | undefined): string {
+  if (base === null || base === undefined) return "0";
+  const n = BigInt(base);
+  const sign = n < 0n ? "-" : "+";
+  return sign + usdc(n < 0n ? -n : n);
 }
 
 export function bps(v: string): string {

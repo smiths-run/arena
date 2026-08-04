@@ -4,12 +4,23 @@
  *
  * The report exists because a trader's own signal is weak in a specific,
  * checkable way. A trader can see *that* a market has recent trades; it cannot
- * cheaply see whether that flow is genuine outside interest or one wallet
- * cycling its own market. Distinguishing those needs the full trade history of
- * the market, joined against the creator — which is what the analyst does.
+ * cheaply see how many distinct wallets are behind them, how concentrated the
+ * buying is, or what the creator's other markets did. That needs the market's
+ * trade history joined against its creator, which is what the analyst computes.
  *
  * Everything here is derived from public data. The value is not secrecy; it is
  * the work of computing it, and that is what a buyer pays for.
+ *
+ * What this does NOT establish, and must not be sold as:
+ *
+ *   - **Independence.** "External" here means an address other than the
+ *     creator's. One person with two wallets, or two colluding agents, reads as
+ *     two external traders. ERC-8004 identity does not solve Sybil either. The
+ *     report measures wallet diversity, not distinct people.
+ *   - **Completeness.** The indexer is queried with limits (500 trades per
+ *     market, 500 recent trades globally, 100 markets). On a small testnet that
+ *     covers everything; at scale these become samples, and the fields below
+ *     become approximations rather than totals.
  */
 const INDEXER = process.env.INDEXER_URL ?? "http://localhost:42069";
 
@@ -19,7 +30,7 @@ export interface Report {
   generatedAtBlock: string;
   /** Trades in the market's whole indexed life. */
   tradeCount: number;
-  /** Distinct wallets that are not the creator. */
+  /** Distinct addresses that are not the creator. Not proof of distinct people. */
   externalTraders: number;
   /** Share of trades placed by someone other than the creator, 0–1. */
   externalTradeRatio: number;

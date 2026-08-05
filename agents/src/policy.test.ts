@@ -108,6 +108,63 @@ test("selling more than the recorded position is rejected", () => {
   assert.match((v as { reason: string }).reason, /exceeds recorded position/);
 });
 
+test("a claim worth less than its gas is rejected", () => {
+  const v = evaluate({ kind: "claim", marketId: 0n, amount: 100n }, anvil, base);
+  assert.equal(v.ok, false);
+  assert.match((v as { reason: string }).reason, /not worth the gas/);
+});
+
+test("a claim worth collecting passes", () => {
+  const v = evaluate({ kind: "claim", marketId: 0n, amount: 16_500n }, anvil, base);
+  assert.deepEqual(v, { ok: true });
+});
+
+test("a claim the strategy does not permit is refused", () => {
+  const noClaim = { ...anvil, allowedActions: ["buy" as const] };
+  const v = evaluate({ kind: "claim", marketId: 0n, amount: 16_500n }, noClaim, base);
+  assert.equal(v.ok, false);
+  assert.match((v as { reason: string }).reason, /not permitted/);
+});
+
+test("the reserve check keeps back gas headroom", () => {
+  // Exactly spend + reserve, with nothing left for the transaction's own gas.
+  const v = evaluate({ kind: "buy", marketId: 0n, usdcIn: 1_000_000n }, anvil, {
+    ...base,
+    balanceUsdc: 1_000_000n + anvil.operatingReserveUsdc,
+  });
+  assert.equal(v.ok, false);
+  assert.match((v as { reason: string }).reason, /gas headroom/);
+});
+
+/**
+ * The cap once failed in production because ownMarketCount came from the indexer,
+ * which lags the chain: an agent that had just launched still read as under its
+ * cap and launched again, ending with three markets against a limit of two. The
+ * policy engine was never wrong — it was fed a stale number. This pins the
+ * contract between them: whatever the caller passes must already include
+ * everything confirmed and in flight.
+ */
+test("the own-market cap binds on the count it is given, including in-flight", () => {
+  const tongs = STRATEGIES.tongs;
+  const confirmed = tongs.maxOwnMarkets - 1;
+
+  const underCap = evaluate(
+    { kind: "launch", name: "Ember", symbol: "EMBER", initialBuy: 1_000_000n },
+    tongs,
+    { ...base, ownMarketCount: confirmed },
+  );
+  assert.deepEqual(underCap, { ok: true }, "one below the cap may still launch");
+
+  // Same confirmed count, but one launch is in flight. The caller must add it.
+  const withInFlight = evaluate(
+    { kind: "launch", name: "Ember", symbol: "EMBER", initialBuy: 1_000_000n },
+    tongs,
+    { ...base, ownMarketCount: confirmed + 1 },
+  );
+  assert.equal(withInFlight.ok, false, "counting the in-flight launch closes the cap");
+  assert.match((withInFlight as { reason: string }).reason, /own-market cap/);
+});
+
 test("launch respects the own-market cap", () => {
   const tongs = STRATEGIES.tongs;
   const v = evaluate(

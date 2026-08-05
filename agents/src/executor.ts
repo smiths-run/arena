@@ -34,6 +34,21 @@ export async function submit(
   idem: (string | number)[],
   runId: number | null = null,
 ): Promise<string> {
+  // Circle takes the ABI signature as a string and the arguments as a loose array,
+  // so a wrong arity is only discovered when the transaction fails on their side —
+  // which is how a missing `spender` sat undetected in the sell path until the
+  // first live sell. Counting them here turns that into an immediate, local error.
+  const declared = abiFunctionSignature.slice(
+    abiFunctionSignature.indexOf("(") + 1,
+    abiFunctionSignature.lastIndexOf(")"),
+  );
+  const expected = declared.trim() === "" ? 0 : declared.split(",").length;
+  if (abiParameters.length !== expected) {
+    throw new Error(
+      `${purpose}: ${abiFunctionSignature} takes ${expected} argument(s), got ${abiParameters.length}`,
+    );
+  }
+
   // The logical key names the *action*; the idempotency key names this *attempt*
   // at it. Circle replays the original outcome for a repeated key, so a retry
   // after a terminal failure needs a new one — derived from how many attempts
@@ -107,8 +122,9 @@ async function ensureTokenAllowance(
     "approve-token",
     token,
     "approve(address,uint256)",
-    // Effectively unbounded for this token; the market only pulls what a sell passes.
-    ["115792089237316195423570985008687907853269984665640564039457584007913129639935"],
+    // Spender first, then amount — effectively unbounded for this token, since the
+    // market only ever pulls what a sell explicitly passes it.
+    [MARKETS, "115792089237316195423570985008687907853269984665640564039457584007913129639935"],
     ["approve-token", agent.address, token],
   );
 }
@@ -159,6 +175,22 @@ export async function execute(
       runId,
     );
     return { txHash, usdcMoved: usdcOut, marketId: action.marketId };
+  }
+
+  if (action.kind === "claim") {
+    // Permissionless on the contract: anyone may trigger the payout, but it can
+    // only ever go to the creator. The agent triggers its own.
+    const txHash = await submit(
+      client,
+      agent,
+      "claim",
+      MARKETS,
+      "claimCreatorFees(uint256)",
+      [action.marketId.toString()],
+      ["claim", agent.address, action.marketId.toString(), runId],
+      runId,
+    );
+    return { txHash, usdcMoved: action.amount, marketId: action.marketId };
   }
 
   // launch

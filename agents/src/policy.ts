@@ -12,6 +12,7 @@ export type Action =
   | { kind: "buy"; marketId: bigint; usdcIn: bigint }
   | { kind: "sell"; marketId: bigint; tokens: bigint }
   | { kind: "launch"; name: string; symbol: string; initialBuy: bigint }
+  | { kind: "claim"; marketId: bigint; amount: bigint }
   | { kind: "skip"; reason: string };
 
 export interface Observation {
@@ -23,7 +24,11 @@ export interface Observation {
   quotedImpactBps: bigint | null;
   /** Tokens the agent holds in the action's market (for sells). */
   positionTokens: bigint;
-  /** Markets this agent has created (for launch caps). */
+  /**
+   * Markets this agent has created — counted from the chain plus anything still
+   * in flight. Never from the indexer: a cap decided against a lagging read is
+   * not a cap.
+   */
   ownMarketCount: number;
 }
 
@@ -94,6 +99,17 @@ export function evaluate(action: Action, strategy: Strategy, obs: Observation): 
       return {
         ok: false,
         reason: `sell ${action.tokens} exceeds recorded position ${obs.positionTokens}`,
+      };
+    }
+  }
+
+  if (action.kind === "claim") {
+    // Claiming costs gas. Sweeping dust burns more than it collects, which is a
+    // slow way to lose money while looking productive.
+    if (action.amount <= GAS_HEADROOM_USDC / 4n) {
+      return {
+        ok: false,
+        reason: `claim of ${action.amount} is not worth the gas it would cost`,
       };
     }
   }

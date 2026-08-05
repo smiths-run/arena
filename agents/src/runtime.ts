@@ -86,12 +86,17 @@ export async function runOnce(
   };
 
   try {
-    const [markets, recentTrades, balance, blockNow] = await Promise.all([
+    const [markets, recentTrades, balance, blockNow, ownOnChain] = await Promise.all([
       obs.fetchMarkets(),
       obs.fetchRecentTrades(),
       obs.walletUsdc(agent.address),
       obs.currentBlock(),
+      obs.ownMarketCountOnChain(agent.address),
     ]);
+
+    // A cap must count confirmed and in-flight together. The chain misses what is
+    // still in the mempool; the local ledger has it.
+    const ownMarkets = ownOnChain + store.inFlightLaunches(agentName);
 
     const action = await strategist({
       agentName,
@@ -100,6 +105,7 @@ export async function runOnce(
       markets,
       recentTrades,
       blockNow,
+      ownMarkets,
     });
 
     if (action.kind === "skip") {
@@ -176,8 +182,7 @@ export async function runOnce(
       spent24h: store.spentLast24h(agentName),
       quotedImpactBps: null,
       positionTokens: 0n,
-      ownMarketCount: markets.filter((m) => m.creator.toLowerCase() === agent.address.toLowerCase())
-        .length,
+      ownMarketCount: ownMarkets,
     };
     if (action.kind === "buy") {
       observation.quotedImpactBps = (await obs.quoteBuy(action.marketId, action.usdcIn)).impactBps;
@@ -228,6 +233,8 @@ function summarize(action: { kind: string } & Record<string, unknown>): string {
       return `sell ${action.tokens} tokens on market ${action.marketId}`;
     case "launch":
       return `launch ${action.symbol} with ${Number(action.initialBuy) / 1e6} USDC`;
+    case "claim":
+      return `claim ${Number(action.amount) / 1e6} USDC of creator fees on market ${action.marketId}`;
     default:
       return action.kind;
   }

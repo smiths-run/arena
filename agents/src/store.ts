@@ -313,6 +313,26 @@ export function failedAttempts(logicalKey: string): number {
   return row.n;
 }
 
+/**
+ * Launches this agent has submitted that have not reached a terminal state.
+ *
+ * A cap has to count what is in flight as well as what is confirmed. Reading only
+ * the chain closes the indexer-lag window but leaves the mempool window open: a
+ * launch submitted two seconds ago is on neither the chain nor the indexer, and
+ * without this the agent would launch again.
+ */
+export function inFlightLaunches(agent: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) n FROM pending_tx
+       WHERE agent = ? AND purpose = 'launch'
+         AND state NOT IN ('FAILED','DENIED','CANCELLED')
+         AND applied = 0`,
+    )
+    .get(agent) as { n: number };
+  return row.n;
+}
+
 export function isApplied(key: string): boolean {
   const row = db
     .prepare("SELECT applied FROM pending_tx WHERE idempotency_key = ?")

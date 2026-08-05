@@ -12,6 +12,8 @@ const chainAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function quoteBuy(uint256 id, uint256 usdcIn) view returns (uint256 tokensOut, uint256 fee, uint256 impactBps)",
   "function quoteSell(uint256 id, uint256 tokensIn) view returns (uint256 usdcOut, uint256 fee, uint256 impactBps)",
+  "function marketCount() view returns (uint256)",
+  "function markets(uint256) view returns (address token, address creator, uint256 reserveUsdc, uint256 reserveToken, uint256 creatorFees, uint64 createdAtBlock)",
 ]);
 
 /**
@@ -97,6 +99,60 @@ export async function fetchRecentTrades(): Promise<TradeView[]> {
     trader: t.trader,
     blockNumber: BigInt(t.blockNumber),
   }));
+}
+
+/**
+ * Markets this address has created, read from the chain.
+ *
+ * The indexer is eventually consistent, and a hard limit must never be decided
+ * against a lagging source: an agent that launched a market seconds ago is still
+ * under its cap as far as the indexer is concerned, and will launch again. That
+ * is not hypothetical — it is how one agent here ended up with three markets
+ * against a cap of two.
+ */
+export async function ownMarketCountOnChain(address: `0x${string}`): Promise<number> {
+  const count = await pub.readContract({
+    address: MARKETS as `0x${string}`,
+    abi: chainAbi,
+    functionName: "marketCount",
+  });
+
+  let mine = 0;
+  for (let i = 0n; i < count; i++) {
+    const [, creator] = await pub.readContract({
+      address: MARKETS as `0x${string}`,
+      abi: chainAbi,
+      functionName: "markets",
+      args: [i],
+    });
+    if (creator.toLowerCase() === address.toLowerCase()) mine++;
+  }
+  return mine;
+}
+
+/** Creator fees this address can claim, per market, read from the chain. */
+export async function claimableFees(
+  address: `0x${string}`,
+): Promise<Array<{ marketId: bigint; amount: bigint }>> {
+  const count = await pub.readContract({
+    address: MARKETS as `0x${string}`,
+    abi: chainAbi,
+    functionName: "marketCount",
+  });
+
+  const out: Array<{ marketId: bigint; amount: bigint }> = [];
+  for (let i = 0n; i < count; i++) {
+    const [, creator, , , fees] = await pub.readContract({
+      address: MARKETS as `0x${string}`,
+      abi: chainAbi,
+      functionName: "markets",
+      args: [i],
+    });
+    if (creator.toLowerCase() === address.toLowerCase() && fees > 0n) {
+      out.push({ marketId: i, amount: fees });
+    }
+  }
+  return out;
 }
 
 export async function walletUsdc(address: `0x${string}`): Promise<bigint> {

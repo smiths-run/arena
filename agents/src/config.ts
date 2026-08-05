@@ -4,7 +4,7 @@
  *
  * Units: USDC amounts in 6-decimal base units, impact in basis points.
  */
-export type ActionKind = "buy" | "sell" | "launch";
+export type ActionKind = "buy" | "sell" | "launch" | "claim";
 
 export interface Strategy {
   /** Actions this agent is permitted to take at all. */
@@ -25,6 +25,15 @@ export interface Strategy {
   lookbackBlocks: bigint;
   /** Take profit when a position quotes above cost by this many bps. */
   takeProfitBps: bigint;
+  /**
+   * Cut a position that has fallen this far below cost, in bps.
+   *
+   * Its absence was a real gap: a strategy with a take-profit and no stop-loss
+   * has unbounded downside on any single position. Set generously — a fresh
+   * position is always underwater by the round trip's two fees (~200 bps), and
+   * cutting on that alone would just realise the spread.
+   */
+  stopLossBps: bigint;
   /** For launchers: keep at most this many markets of their own. */
   maxOwnMarkets: number;
   /** Initial buy when launching. */
@@ -42,7 +51,7 @@ export interface Strategy {
 export const STRATEGIES: Record<string, Strategy> = {
   /** Trader: buys where outsiders are active, takes profit mechanically. */
   anvil: {
-    allowedActions: ["buy", "sell"],
+    allowedActions: ["buy", "sell", "claim"],
     maxTradeUsdc: 2_000_000n,
     dailySpendUsdc: 6_000_000n,
     operatingReserveUsdc: 500_000n,
@@ -51,6 +60,7 @@ export const STRATEGIES: Record<string, Strategy> = {
     minExternalTrades: 1,
     lookbackBlocks: 2_000n,
     takeProfitBps: 500n,
+    stopLossBps: 1_500n,
     maxOwnMarkets: 0,
     launchBuyUsdc: 0n,
     cooldownSeconds: 60,
@@ -59,7 +69,7 @@ export const STRATEGIES: Record<string, Strategy> = {
   /** Analyst: allowed to buy but demands so much external evidence it rarely does.
    *  Its job is the x402 report desk (M6); refusing trades is expected behaviour. */
   bellows: {
-    allowedActions: ["buy"],
+    allowedActions: ["buy", "claim"],
     maxTradeUsdc: 1_000_000n,
     dailySpendUsdc: 2_000_000n,
     operatingReserveUsdc: 500_000n,
@@ -68,6 +78,7 @@ export const STRATEGIES: Record<string, Strategy> = {
     minExternalTrades: 8,
     lookbackBlocks: 1_000n,
     takeProfitBps: 800n,
+    stopLossBps: 1_500n,
     maxOwnMarkets: 0,
     launchBuyUsdc: 0n,
     cooldownSeconds: 90,
@@ -75,7 +86,7 @@ export const STRATEGIES: Record<string, Strategy> = {
   },
   /** Market-maker: launches markets and lives off creator fees from outside flow. */
   tongs: {
-    allowedActions: ["launch", "sell"],
+    allowedActions: ["launch", "sell", "claim"],
     maxTradeUsdc: 1_000_000n,
     dailySpendUsdc: 4_000_000n,
     operatingReserveUsdc: 500_000n,
@@ -83,7 +94,8 @@ export const STRATEGIES: Record<string, Strategy> = {
     blockedMarkets: [],
     minExternalTrades: 0,
     lookbackBlocks: 2_000n,
-    takeProfitBps: 1_000n,
+    takeProfitBps: 300n,
+    stopLossBps: 1_500n,
     maxOwnMarkets: 3,
     launchBuyUsdc: 1_000_000n,
     cooldownSeconds: 120,

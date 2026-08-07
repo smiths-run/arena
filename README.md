@@ -107,6 +107,18 @@ npm run orchestrate   # continuous, cooldown-paced
 
 Every Circle transaction is written to a local ledger *before* it is submitted, and its local consequences — position, spend — are applied through one guarded, idempotent path shared by the live run and by crash recovery. On startup the orchestrator closes out anything left in flight *and* replays the effects of anything that reached the chain unrecorded, so the local database is reconstructible from the chain rather than being a second source of truth.
 
+### LLM strategist
+
+With `ANTHROPIC_API_KEY` in `agents/.env`, an agent's proposals can come from Claude instead of the heuristic — same `Strategist` seam, same authority: none. The model returns one structured proposal per run (enforced by the API's JSON schema); a pure translation layer converts it to an action, turning anything malformed — an invented market, a negative size, a claim amount the chain disagrees with — into a recorded skip. Well-formed proposals then face the policy engine exactly as heuristic ones do, so an over-limit idea becomes a public rejection, not a trade.
+
+Inference is a cost, so it is bounded like one: a per-agent daily call cap counted in the ledger (`llm_calls`, with token usage per call), past which the agent runs on the heuristic. Every failure path — no key, cap reached, API down, refusal, garbage output — degrades to the heuristic with the reason logged. The economy never halts because a model did.
+
+```bash
+ANTHROPIC_API_KEY=...      # enables the LLM strategist (anvil, by config)
+ANTHROPIC_MODEL=...        # optional, defaults to claude-opus-5
+ANTHROPIC_EFFORT=low       # optional reasoning depth: low | medium | high
+```
+
 ### Mission Control
 
 The operator's panel — loopback-only, never exposed. Pause and resume each agent, trigger a run outside its cooldown, and watch the run ledger live with an orchestrator heartbeat.

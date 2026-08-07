@@ -46,6 +46,13 @@ export interface Strategy {
    * cycling a market; the report can, so it is worth paying for.
    */
   paidIntel: { enabled: boolean; maxCostUsdc: bigint };
+  /**
+   * Let an LLM propose this agent's actions (ANTHROPIC_API_KEY-gated). The
+   * model has exactly the heuristic's authority — none; every proposal still
+   * passes the policy engine. Inference is a cost, so it is capped like one:
+   * past maxCallsPerDay the agent runs on the heuristic until the day rolls.
+   */
+  llm: { enabled: boolean; maxCallsPerDay: number };
 }
 
 export const STRATEGIES: Record<string, Strategy> = {
@@ -65,6 +72,7 @@ export const STRATEGIES: Record<string, Strategy> = {
     launchBuyUsdc: 0n,
     cooldownSeconds: 60,
     paidIntel: { enabled: true, maxCostUsdc: 10_000n },
+    llm: { enabled: true, maxCallsPerDay: 150 },
   },
   /** Analyst: allowed to buy but demands so much external evidence it rarely does.
    *  Its job is the x402 report desk (M6); refusing trades is expected behaviour. */
@@ -83,6 +91,7 @@ export const STRATEGIES: Record<string, Strategy> = {
     launchBuyUsdc: 0n,
     cooldownSeconds: 90,
     paidIntel: { enabled: false, maxCostUsdc: 0n },
+    llm: { enabled: false, maxCallsPerDay: 0 },
   },
   /** Market-maker: launches markets and lives off creator fees from outside flow. */
   tongs: {
@@ -100,6 +109,7 @@ export const STRATEGIES: Record<string, Strategy> = {
     launchBuyUsdc: 1_000_000n,
     cooldownSeconds: 120,
     paidIntel: { enabled: false, maxCostUsdc: 0n },
+    llm: { enabled: false, maxCallsPerDay: 0 },
   },
 };
 

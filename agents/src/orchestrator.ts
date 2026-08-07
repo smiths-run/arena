@@ -9,11 +9,24 @@ import { AGENTS, circle } from "./shared.ts";
 import { STRATEGIES } from "./config.ts";
 import { runOnce } from "./runtime.ts";
 import { decide } from "./schedule.ts";
+import { heuristicStrategist, type Strategist } from "./strategist.ts";
+import { llmStrategist } from "./llm-strategist.ts";
 import * as executor from "./executor.ts";
 import * as store from "./store.ts";
 
 const client = circle();
 const once = process.argv.includes("--once");
+
+/**
+ * The LLM proposes only where the strategy enables it and a key exists; the
+ * cap and every failure path inside llmStrategist fall back to the heuristic,
+ * so this choice affects who proposes — never whether the loop runs.
+ */
+function strategistFor(name: string): Strategist {
+  return STRATEGIES[name].llm.enabled && process.env.ANTHROPIC_API_KEY
+    ? llmStrategist
+    : heuristicStrategist;
+}
 
 const { closed, replayed } = await executor.reconcile(client);
 if (closed > 0) console.log(`reconciled ${closed} pending transaction(s) from a previous life`);
@@ -53,7 +66,7 @@ async function pass(): Promise<void> {
       cooldownMs: STRATEGIES[agent.name].cooldownSeconds * 1000,
     });
     if (!verdict.run) continue;
-    await runOnce(agent.name, verdict.trigger, client);
+    await runOnce(agent.name, verdict.trigger, client, strategistFor(agent.name));
   }
 }
 

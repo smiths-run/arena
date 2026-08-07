@@ -145,6 +145,18 @@ db.exec(`
     id INTEGER PRIMARY KEY CHECK (id = 1),
     at INTEGER NOT NULL
   );
+
+  -- Inference is a cost, so it gets a ledger like every other cost: one row
+  -- per LLM call, and the daily cap is counted from here.
+  CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    model TEXT NOT NULL,
+    tokens_in INTEGER NOT NULL,
+    tokens_out INTEGER NOT NULL,
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS llm_calls_agent ON llm_calls(agent, at);
 `);
 
 // ── runs ────────────────────────────────────────────────────────────────────
@@ -515,6 +527,24 @@ export function hasPendingRunRequest(agent: string): boolean {
     .prepare("SELECT id FROM run_requests WHERE agent = ? AND consumed_at IS NULL LIMIT 1")
     .get(agent) as { id: number } | undefined;
   return row !== undefined;
+}
+
+export function llmCallRecord(
+  agent: string,
+  model: string,
+  tokensIn: number,
+  tokensOut: number,
+): void {
+  db.prepare(
+    "INSERT INTO llm_calls (agent, model, tokens_in, tokens_out, at) VALUES (?, ?, ?, ?, ?)",
+  ).run(agent, model, tokensIn, tokensOut, Date.now());
+}
+
+export function llmCallsLast24h(agent: string): number {
+  const row = db
+    .prepare("SELECT COUNT(*) n FROM llm_calls WHERE agent = ? AND at > ?")
+    .get(agent, Date.now() - 24 * 3600 * 1000) as { n: number };
+  return row.n;
 }
 
 export function heartbeat(): void {

@@ -21,7 +21,7 @@ jobs:
     name: Contracts — forge test (25 tests, 6 stateful invariants)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           # Pinned to the version the deployed bytecode was built with.
@@ -37,8 +37,8 @@ jobs:
       run:
         working-directory: agents
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 26
           cache: npm
@@ -54,8 +54,8 @@ jobs:
       run:
         working-directory: indexer
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 26
           cache: npm
@@ -72,8 +72,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 26
           cache: npm

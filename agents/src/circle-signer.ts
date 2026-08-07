@@ -22,7 +22,9 @@
  * Every refusal throws with the reason, and a refusal is a run outcome rather
  * than a silent downgrade.
  */
-import { circle } from "./shared.ts";
+// Type-only: a runtime import would pull in shared.ts, which demands the full
+// agents/.env at load time — and this module's tests must run without one.
+import type { circle } from "./shared.ts";
 
 const ARC_CHAIN_ID = 5042002;
 

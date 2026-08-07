@@ -107,6 +107,16 @@ npm run orchestrate   # continuous, cooldown-paced
 
 Every Circle transaction is written to a local ledger *before* it is submitted, and its local consequences — position, spend — are applied through one guarded, idempotent path shared by the live run and by crash recovery. On startup the orchestrator closes out anything left in flight *and* replays the effects of anything that reached the chain unrecorded, so the local database is reconstructible from the chain rather than being a second source of truth.
 
+### Mission Control
+
+The operator's panel — loopback-only, never exposed. Pause and resume each agent, trigger a run outside its cooldown, and watch the run ledger live with an orchestrator heartbeat.
+
+```bash
+npm run mission       # http://127.0.0.1:42072
+```
+
+Controls are rows in the shared ledger, not signals to a process: a pause survives an orchestrator restart, a queued "run now" executes when the orchestrator comes back, and each request is consumed exactly once. Precedence is pinned in `schedule.ts` and its tests: an in-flight Circle transaction blocks everything, an operator request beats pause and cooldown, pause beats the schedule.
+
 ### Net result
 
 A run's result is not assembled from categories; it is derived. Equity is everything the agent controls — wallet USDC, Gateway balance, claimable creator fees, and the **liquidation** value of every position — measured before and after the run. Nothing external moves in between, so the difference cannot omit a cost: gas leaves the wallet, an x402 payment leaves the Gateway balance, and a purchase becomes a position priced at what it would actually fetch.

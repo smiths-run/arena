@@ -10,7 +10,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 
-const DIR = new URL("../data", import.meta.url).pathname;
+// Overridable so tests can point the ledger at a throwaway directory instead
+// of the live one.
+const DIR = process.env.AGENTS_DATA_DIR ?? new URL("../data", import.meta.url).pathname;
 mkdirSync(DIR, { recursive: true });
 
 export const db = new DatabaseSync(`${DIR}/agents.db`);
@@ -122,6 +124,25 @@ db.exec(`
     market_id TEXT NOT NULL,
     amount_usdc TEXT NOT NULL,
     settlement_ref TEXT,
+    at INTEGER NOT NULL
+  );
+
+  -- Operator control (Mission Control writes, the orchestrator reads). These sit
+  -- in the shared ledger rather than in signals or files so a pause survives a
+  -- restart and a run request is consumed exactly once.
+  CREATE TABLE IF NOT EXISTS control (
+    agent TEXT PRIMARY KEY,
+    paused INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS run_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    consumed_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS heartbeat (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
     at INTEGER NOT NULL
   );
 `);
@@ -451,4 +472,58 @@ export function spentLast24h(agent: string): bigint {
     .prepare("SELECT usdc FROM spends WHERE agent = ? AND at > ?")
     .all(agent, Date.now() - 24 * 3600 * 1000) as Array<{ usdc: string }>;
   return rows.reduce((sum, r) => sum + BigInt(r.usdc), 0n);
+}
+
+// ── operator control ────────────────────────────────────────────────────────
+
+export function setPaused(agent: string, paused: boolean): void {
+  db.prepare(
+    `INSERT INTO control (agent, paused, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(agent) DO UPDATE SET paused = excluded.paused, updated_at = excluded.updated_at`,
+  ).run(agent, paused ? 1 : 0, Date.now());
+}
+
+export function isPaused(agent: string): boolean {
+  const row = db.prepare("SELECT paused FROM control WHERE agent = ?").get(agent) as
+    | { paused: number }
+    | undefined;
+  return row?.paused === 1;
+}
+
+export function requestRun(agent: string): void {
+  db.prepare("INSERT INTO run_requests (agent, requested_at) VALUES (?, ?)").run(agent, Date.now());
+}
+
+/**
+ * Consume one pending run request for this agent, if any. Consuming rather than
+ * reading is what makes "run now" mean once: two clicks are two rows, and each
+ * row triggers exactly one run.
+ */
+export function takeRunRequest(agent: string): boolean {
+  const row = db
+    .prepare(
+      "SELECT id FROM run_requests WHERE agent = ? AND consumed_at IS NULL ORDER BY id LIMIT 1",
+    )
+    .get(agent) as { id: number } | undefined;
+  if (!row) return false;
+  db.prepare("UPDATE run_requests SET consumed_at = ? WHERE id = ?").run(Date.now(), row.id);
+  return true;
+}
+
+export function hasPendingRunRequest(agent: string): boolean {
+  const row = db
+    .prepare("SELECT id FROM run_requests WHERE agent = ? AND consumed_at IS NULL LIMIT 1")
+    .get(agent) as { id: number } | undefined;
+  return row !== undefined;
+}
+
+export function heartbeat(): void {
+  db.prepare(
+    "INSERT INTO heartbeat (id, at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET at = excluded.at",
+  ).run(Date.now());
+}
+
+export function lastHeartbeatAt(): number {
+  const row = db.prepare("SELECT at FROM heartbeat WHERE id = 1").get() as { at: number } | undefined;
+  return row?.at ?? 0;
 }

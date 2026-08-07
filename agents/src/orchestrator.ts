@@ -8,6 +8,7 @@
 import { AGENTS, circle } from "./shared.ts";
 import { STRATEGIES } from "./config.ts";
 import { runOnce } from "./runtime.ts";
+import { decide } from "./schedule.ts";
 import * as executor from "./executor.ts";
 import * as store from "./store.ts";
 
@@ -35,13 +36,24 @@ for (const name of heldAgents()) {
 }
 
 async function pass(): Promise<void> {
+  // The heartbeat is how Mission Control knows this loop is alive; stamped per
+  // pass, not per run, so a quiet pass still counts as presence.
+  store.heartbeat();
   const held = heldAgents();
   for (const agent of AGENTS) {
-    if (held.has(agent.name)) continue;
-    const cooldownMs = STRATEGIES[agent.name].cooldownSeconds * 1000;
-    const since = Date.now() - store.lastRunAt(agent.name);
-    if (!once && since < cooldownMs) continue;
-    await runOnce(agent.name, once ? "manual" : "schedule", client);
+    const isHeld = held.has(agent.name);
+    const verdict = decide({
+      held: isHeld,
+      // Consuming the request only when not held keeps an operator's click
+      // pending through the hold instead of silently discarding it.
+      requested: isHeld ? false : store.takeRunRequest(agent.name),
+      paused: store.isPaused(agent.name),
+      once,
+      sinceLastRunMs: Date.now() - store.lastRunAt(agent.name),
+      cooldownMs: STRATEGIES[agent.name].cooldownSeconds * 1000,
+    });
+    if (!verdict.run) continue;
+    await runOnce(agent.name, verdict.trigger, client);
   }
 }
 

@@ -148,8 +148,7 @@ contract Markets {
         )
     {
         Market storage m = _market(id);
-        return
-            (address(m.token), m.creator, m.reserveUsdc, m.reserveToken, m.creatorFees, m.createdAtBlock);
+        return (address(m.token), m.creator, m.reserveUsdc, m.reserveToken, m.creatorFees, m.createdAtBlock);
     }
 
     /// @notice Preview a buy without executing it.

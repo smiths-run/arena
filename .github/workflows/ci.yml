@@ -1,0 +1,82 @@
+# Every push proves the same three things a reviewer would otherwise have to
+# take on faith: the contracts hold their invariants, the agent-side guards
+# refuse what they must refuse, and every package still typechecks.
+#
+# Nothing here needs a secret or an RPC endpoint. The contract tests run
+# against a mock USDC etched at the real Arc address; the one fork-dependent
+# suite (ArcSetupTest) skips itself when ARC_TESTNET_RPC_URL is absent.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Contracts — forge test (25 tests, 6 stateful invariants)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned to the version the deployed bytecode was built with.
+          version: v1.7.1
+      - run: forge fmt --check src test
+      - run: forge build --sizes
+      - run: forge test -vv
+
+  agents:
+    name: Agents — policy, mandate and report tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agents
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: agents/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  indexer:
+    name: Indexer — codegen and typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indexer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: indexer/package-lock.json
+      - run: npm ci
+      # ponder-env.d.ts is generated, not committed; typecheck needs it.
+      - run: npx ponder codegen
+      - run: npm run typecheck
+
+  web:
+    name: Web — typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck

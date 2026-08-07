@@ -240,9 +240,7 @@ contract MarketsInvariantTest is Test {
         for (uint256 i; i < n; ++i) {
             (address t,,, uint256 rT,,) = mk.markets(i);
             assertGe(
-                CoinToken(t).balanceOf(address(mk)),
-                rT,
-                "token reserve must be backed by the real balance"
+                CoinToken(t).balanceOf(address(mk)), rT, "token reserve must be backed by the real balance"
             );
         }
     }

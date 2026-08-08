@@ -62,7 +62,11 @@ export function TradePanel({ marketId, token, symbol, reserveUsdc, reserveToken 
   const [quote, setQuote] = useState<{ out: bigint; impactBps: bigint } | null>(null);
   const clients = useRef<{ pub: PublicClient; wallet: WalletClient } | null>(null);
 
-  const hasWallet = typeof window !== "undefined" && Boolean((window as any).ethereum);
+  // Wallet detection happens after mount so the server-rendered HTML and the
+  // first client render agree; the panel upgrades itself once hydrated.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const hasWallet = mounted && Boolean((window as any).ethereum);
   const id = BigInt(marketId);
   const rU = BigInt(reserveUsdc);
   const rT = BigInt(reserveToken);

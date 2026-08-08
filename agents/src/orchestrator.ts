@@ -5,8 +5,8 @@
  *   npm run once           # a single pass over every agent, then exit
  *   npm run orchestrate    # continuous
  */
-import { AGENTS, circle } from "./shared.ts";
-import { STRATEGIES } from "./config.ts";
+import { circle } from "./shared.ts";
+import { fullRoster, type RosterEntry } from "./roster.ts";
 import { runOnce } from "./runtime.ts";
 import { decide } from "./schedule.ts";
 import { heuristicStrategist, type Strategist } from "./strategist.ts";
@@ -22,8 +22,8 @@ const once = process.argv.includes("--once");
  * cap and every failure path inside llmStrategist fall back to the heuristic,
  * so this choice affects who proposes — never whether the loop runs.
  */
-function strategistFor(name: string): Strategist {
-  return STRATEGIES[name].llm.enabled && process.env.ANTHROPIC_API_KEY
+function strategistFor(entry: RosterEntry): Strategist {
+  return entry.strategy.llm.enabled && process.env.ANTHROPIC_API_KEY
     ? llmStrategist
     : heuristicStrategist;
 }
@@ -53,7 +53,9 @@ async function pass(): Promise<void> {
   // pass, not per run, so a quiet pass still counts as presence.
   store.heartbeat();
   const held = heldAgents();
-  for (const agent of AGENTS) {
+  // Re-read the roster every pass: a visitor agent created a second ago is
+  // part of the economy on the next tick, no restart required.
+  for (const agent of fullRoster()) {
     const isHeld = held.has(agent.name);
     const verdict = decide({
       held: isHeld,
@@ -63,10 +65,10 @@ async function pass(): Promise<void> {
       paused: store.isPaused(agent.name),
       once,
       sinceLastRunMs: Date.now() - store.lastRunAt(agent.name),
-      cooldownMs: STRATEGIES[agent.name].cooldownSeconds * 1000,
+      cooldownMs: agent.strategy.cooldownSeconds * 1000,
     });
     if (!verdict.run) continue;
-    await runOnce(agent.name, verdict.trigger, client, strategistFor(agent.name));
+    await runOnce(agent.name, verdict.trigger, client, strategistFor(agent));
   }
 }
 
@@ -82,7 +84,7 @@ if (once) {
     );
   }
 } else {
-  console.log(`orchestrating ${AGENTS.length} agents; ctrl-c to stop`);
+  console.log(`orchestrating ${fullRoster().length} agents; ctrl-c to stop`);
   // eslint-disable-next-line no-constant-condition
   while (true) {
     await pass();

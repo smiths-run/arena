@@ -14,8 +14,7 @@
  * orchestrator is down executes when it comes back.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { AGENTS } from "./shared.ts";
-import { STRATEGIES } from "./config.ts";
+import { fullRoster } from "./roster.ts";
 import * as store from "./store.ts";
 
 const PORT = Number(process.env.MISSION_PORT ?? 42072);
@@ -24,7 +23,7 @@ const HOST = "127.0.0.1";
 /** The orchestrator stamps every 10s; three misses reads as offline. */
 const OFFLINE_AFTER_MS = 35_000;
 
-const AGENT_NAMES: Set<string> = new Set(AGENTS.map((a) => a.name));
+const agentNames = (): Set<string> => new Set(fullRoster().map((a) => a.name));
 
 function json(res: ServerResponse, value: unknown, status = 200): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -47,8 +46,8 @@ function state(): unknown {
   const held = new Set(store.unresolvedPending().map((r) => r.agent));
   const net = store.netResultByAgent();
 
-  const agents = AGENTS.map((a) => {
-    const s = STRATEGIES[a.name];
+  const agents = fullRoster().map((a) => {
+    const s = a.strategy;
     const lastRun = store.db
       .prepare("SELECT id, outcome, action_kind, reason, finished_at FROM runs WHERE agent = ? ORDER BY id DESC LIMIT 1")
       .get(a.name) as
@@ -109,7 +108,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && (url.pathname === "/api/pause" || url.pathname === "/api/run")) {
     const b = await body(req);
     const agent = String(b.agent ?? "");
-    if (!AGENT_NAMES.has(agent)) return json(res, { error: `unknown agent ${agent}` }, 400);
+    if (!agentNames().has(agent)) return json(res, { error: `unknown agent ${agent}` }, 400);
     if (url.pathname === "/api/pause") {
       store.setPaused(agent, Boolean(b.paused));
     } else {

@@ -7,9 +7,25 @@
  * errored — with its reason. Plain node:http, zero dependencies; the web arena
  * proxies to it so the receipts sit next to the market data.
  */
-import { createServer } from "node:http";
-import { AGENTS } from "./shared.ts";
+import { createServer, type IncomingMessage } from "node:http";
+import { fullRoster } from "./roster.ts";
+import { createUserAgent } from "./agent-factory.ts";
 import * as store from "./store.ts";
+
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > 4096) throw new Error("body too large");
+    chunks.push(c as Buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
 
 const PORT = Number(process.env.RECEIPTS_PORT ?? 42070);
 
@@ -21,10 +37,37 @@ const json = (res: import("node:http").ServerResponse, value: unknown, status = 
   res.end(JSON.stringify(value, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
 };
 
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
 
   if (url.pathname === "/health") return json(res, { ok: true });
+
+  // Visitor agent creation: the one write this surface accepts. Everything a
+  // visitor can influence is clamped in visitor-strategy.ts; everything the
+  // agent later does still passes the policy engine.
+  if (req.method === "POST" && url.pathname === "/agents/create") {
+    if (req.method !== "POST") return json(res, { error: "POST only" }, 405);
+    try {
+      const body = await readJson(req);
+      const ip =
+        (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ??
+        req.socket.remoteAddress ??
+        null;
+      const created = await createUserAgent(body, ip);
+      return json(res, created, 201);
+    } catch (err) {
+      return json(res, { error: err instanceof Error ? err.message : "creation failed" }, 400);
+    }
+  }
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "content-type",
+    });
+    return res.end();
+  }
 
   if (url.pathname === "/runs") {
     const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 500);
@@ -38,7 +81,7 @@ const server = createServer((req, res) => {
   }
 
   if (url.pathname === "/agents") {
-    const rows = AGENTS.map((a) => {
+    const rows = fullRoster().map((a) => {
       const outcomes = store.db
         .prepare("SELECT outcome, COUNT(*) n FROM runs WHERE agent = ? GROUP BY outcome")
         .all(a.name) as Array<{ outcome: string; n: number }>;
@@ -53,6 +96,8 @@ const server = createServer((req, res) => {
       return {
         name: a.name,
         address: a.address,
+        kind: a.kind,
+        symbol: a.strategy.launchNames?.[0]?.symbol ?? null,
         spent24h: store.spentLast24h(a.name).toString(),
         outcomes: Object.fromEntries(outcomes.map((o) => [o.outcome, o.n])),
         positions,

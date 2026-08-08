@@ -53,6 +53,11 @@ export interface Strategy {
    * past maxCallsPerDay the agent runs on the heuristic until the day rolls.
    */
   llm: { enabled: boolean; maxCallsPerDay: number };
+  /**
+   * Names this agent draws from when launching. Visitor agents launch their
+   * own token (their name); the house launcher draws from LAUNCH_NAMES.
+   */
+  launchNames?: Array<{ name: string; symbol: string }>;
 }
 
 export const STRATEGIES: Record<string, Strategy> = {

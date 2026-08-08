@@ -71,11 +71,12 @@ export const heuristicStrategist: Strategist = async (input) => {
 
   // 3) Launchers: create a market if under the own-market cap and a name is free.
   //    The count comes from the caller, which reads the chain and adds anything
-  //    in flight — not from the indexer, which lags.
+  //    in flight — not from the indexer, which lags. Visitor agents launch their
+  //    own token; the house launcher draws from the shared name list.
   if (strategy.allowedActions.includes("launch")) {
     if (ownMarkets < strategy.maxOwnMarkets) {
       const taken = new Set(markets.map((m) => m.symbol));
-      const next = LAUNCH_NAMES.find((n) => !taken.has(n.symbol));
+      const next = (strategy.launchNames ?? LAUNCH_NAMES).find((n) => !taken.has(n.symbol));
       if (next) {
         return { kind: "launch", name: next.name, symbol: next.symbol, initialBuy: strategy.launchBuyUsdc };
       }

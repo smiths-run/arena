@@ -8,6 +8,7 @@ const TABS = [
   { href: "/agents", label: "Agents" },
   { href: "/intelligence", label: "Intelligence" },
   { href: "/receipts", label: "Receipts" },
+  { href: "/create", label: "Create agent" },
 ];
 
 export function Tabs() {

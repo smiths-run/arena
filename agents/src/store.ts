@@ -146,6 +146,25 @@ db.exec(`
     at INTEGER NOT NULL
   );
 
+  -- Visitor-created agents. The row is the agent: its Circle wallet, its
+  -- strategy (JSON, bigints as strings), and whether the orchestrator should
+  -- wake it. Static agents live in config; these live here.
+  CREATE TABLE IF NOT EXISTS user_agents (
+    name TEXT PRIMARY KEY,
+    wallet_id TEXT NOT NULL,
+    address TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    creator_ip TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+  );
+
+  -- One-value settings (e.g. the visitor wallet set id, created once).
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
   -- Inference is a cost, so it gets a ledger like every other cost: one row
   -- per LLM call, and the daily cap is counted from here.
   CREATE TABLE IF NOT EXISTS llm_calls (
@@ -527,6 +546,67 @@ export function hasPendingRunRequest(agent: string): boolean {
     .prepare("SELECT id FROM run_requests WHERE agent = ? AND consumed_at IS NULL LIMIT 1")
     .get(agent) as { id: number } | undefined;
   return row !== undefined;
+}
+
+// ── visitor agents ──────────────────────────────────────────────────────────
+
+export interface UserAgentRow {
+  name: string;
+  wallet_id: string;
+  address: string;
+  strategy: string;
+  active: number;
+  created_at: number;
+}
+
+export function userAgentCreate(row: {
+  name: string;
+  walletId: string;
+  address: string;
+  strategyJson: string;
+  creatorIp: string | null;
+}): void {
+  db.prepare(
+    `INSERT INTO user_agents (name, wallet_id, address, strategy, creator_ip, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(row.name, row.walletId, row.address, row.strategyJson, row.creatorIp, Date.now());
+}
+
+export function userAgents(): UserAgentRow[] {
+  return db
+    .prepare("SELECT * FROM user_agents WHERE active = 1 ORDER BY created_at")
+    .all() as unknown as UserAgentRow[];
+}
+
+export function userAgentByName(name: string): UserAgentRow | undefined {
+  return db.prepare("SELECT * FROM user_agents WHERE name = ?").get(name) as
+    | UserAgentRow
+    | undefined;
+}
+
+export function userAgentCount(): number {
+  const row = db.prepare("SELECT COUNT(*) n FROM user_agents").get() as { n: number };
+  return row.n;
+}
+
+export function userAgentsCreatedBy(ip: string, sinceMs: number): number {
+  const row = db
+    .prepare("SELECT COUNT(*) n FROM user_agents WHERE creator_ip = ? AND created_at > ?")
+    .get(ip, Date.now() - sinceMs) as { n: number };
+  return row.n;
+}
+
+export function settingGet(key: string): string | null {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value ?? null;
+}
+
+export function settingSet(key: string, value: string): void {
+  db.prepare(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run(key, value);
 }
 
 export function llmCallRecord(

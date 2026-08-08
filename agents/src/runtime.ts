@@ -7,8 +7,8 @@
  *   rejected  — the strategist proposed, the policy engine refused
  *   error     — infrastructure failed; the run says where
  */
-import { AGENTS, circle } from "./shared.ts";
-import { STRATEGIES } from "./config.ts";
+import { circle } from "./shared.ts";
+import { resolve } from "./roster.ts";
 import { evaluate, type Observation } from "./policy.ts";
 import { heuristicStrategist, type Strategist } from "./strategist.ts";
 import * as obs from "./observe.ts";
@@ -24,9 +24,10 @@ export async function runOnce(
   client: ReturnType<typeof circle>,
   strategist: Strategist = heuristicStrategist,
 ): Promise<void> {
-  const agent = AGENTS.find((a) => a.name === agentName);
-  const strategy = STRATEGIES[agentName];
-  if (!agent || !strategy) throw new Error(`unknown agent ${agentName}`);
+  const entry = resolve(agentName);
+  if (!entry) throw new Error(`unknown agent ${agentName}`);
+  const agent = entry;
+  const strategy = entry.strategy;
 
   const runId = store.startRun(agentName, trigger);
   const log = (msg: string) => console.log(`[${agentName}#${runId}] ${msg}`);

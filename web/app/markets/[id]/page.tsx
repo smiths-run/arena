@@ -1,6 +1,5 @@
 import { api, bps, short, usdc, who, EXPLORER } from "@/lib/api";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { TradePanel } from "@/components/TradePanel";
 
 export const dynamic = "force-dynamic";
 
@@ -44,14 +43,6 @@ export default async function MarketPage({ params }: { params: Promise<{ id: str
           <div className="label">creator fees accrued</div>
         </div>
       </div>
-
-      <TradePanel
-        marketId={market.id}
-        token={market.token}
-        symbol={market.symbol}
-        reserveUsdc={market.reserveUsdc}
-        reserveToken={market.reserveToken}
-      />
 
       <section>
         <h2>Trades</h2>

@@ -11,7 +11,9 @@ import { runOnce } from "./runtime.ts";
 import { decide } from "./schedule.ts";
 import { heuristicStrategist, type Strategist } from "./strategist.ts";
 import { llmStrategist } from "./llm-strategist.ts";
+import { treasuryGrant } from "./agent-factory.ts";
 import * as executor from "./executor.ts";
+import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 
 const client = circle();
@@ -48,10 +50,40 @@ for (const name of heldAgents()) {
   console.log(`${name}: held — a Circle transaction is still in flight`);
 }
 
+/**
+ * The funding sweep: one ungranted visitor agent per attempt, at most one
+ * attempt a minute. An agent that already holds money (funded at creation,
+ * or out-of-band) is marked granted without a transfer, so the sweep can
+ * never double-fund; an agent the treasury cannot reach yet stays on the
+ * list and its runs keep saying, publicly, that it is broke.
+ */
+async function fundOneVisitor(): Promise<void> {
+  if (!process.env.TREASURY_WALLET_ID) return;
+  const next = store.userAgentsUngranted()[0];
+  if (!next) return;
+  const last = Number(store.settingGet("grant_last_attempt") ?? 0);
+  if (Date.now() - last < 60_000) return;
+  store.settingSet("grant_last_attempt", String(Date.now()));
+  try {
+    const balance = await obs.walletUsdc(next.address as `0x${string}`);
+    if (balance >= 2_000_000n) {
+      store.userAgentMarkGranted(next.name);
+      return;
+    }
+    if (await treasuryGrant(client, next.address)) {
+      store.userAgentMarkGranted(next.name);
+      console.log(`treasury funded ${next.name}`);
+    }
+  } catch (err) {
+    console.log(`treasury grant for ${next.name} failed — ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 async function pass(): Promise<void> {
   // The heartbeat is how Mission Control knows this loop is alive; stamped per
   // pass, not per run, so a quiet pass still counts as presence.
   store.heartbeat();
+  await fundOneVisitor();
   const held = heldAgents();
   // Re-read the roster every pass: a visitor agent created a second ago is
   // part of the economy on the next tick, no restart required.

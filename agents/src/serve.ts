@@ -10,7 +10,24 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { fullRoster } from "./roster.ts";
 import { createUserAgent } from "./agent-factory.ts";
+import * as obs from "./observe.ts";
 import * as store from "./store.ts";
+
+// Wallet balances for the roster listing: one RPC read per agent, cached 30s,
+// and a failure shows as null rather than taking the listing down.
+const balances = new Map<string, { v: string | null; at: number }>();
+async function balanceOf(address: string): Promise<string | null> {
+  const hit = balances.get(address);
+  if (hit && Date.now() - hit.at < 30_000) return hit.v;
+  let v: string | null = null;
+  try {
+    v = (await obs.walletUsdc(address as `0x${string}`)).toString();
+  } catch {
+    v = hit?.v ?? null;
+  }
+  balances.set(address, { v, at: Date.now() });
+  return v;
+}
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -81,7 +98,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === "/agents") {
-    const rows = fullRoster().map((a) => {
+    const rows = await Promise.all(fullRoster().map(async (a) => {
       const outcomes = store.db
         .prepare("SELECT outcome, COUNT(*) n FROM runs WHERE agent = ? GROUP BY outcome")
         .all(a.name) as Array<{ outcome: string; n: number }>;
@@ -98,6 +115,7 @@ const server = createServer(async (req, res) => {
         address: a.address,
         kind: a.kind,
         symbol: a.strategy.launchNames?.[0]?.symbol ?? null,
+        walletUsdc: await balanceOf(a.address),
         spent24h: store.spentLast24h(a.name).toString(),
         outcomes: Object.fromEntries(outcomes.map((o) => [o.outcome, o.n])),
         positions,
@@ -107,7 +125,7 @@ const server = createServer(async (req, res) => {
         intelEarned: String(sold?.total ?? "0"),
         netResult: store.netResultByAgent().find((n) => n.agent === a.name)?.net ?? "0",
       };
-    });
+    }));
     return json(res, { agents: rows });
   }
 

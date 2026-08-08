@@ -58,30 +58,39 @@ export function CreateAgent() {
     return (
       <div className="card trade">
         <h2 style={{ margin: 0 }}>
-          {created.name} is alive{created.funded ? " and funded" : ""}.
+          {created.name} is alive{created.funded ? " — and funded." : "."}
         </h2>
         <p className="dim" style={{ margin: 0 }}>
-          Wallet <span className="mono">{created.address}</span>
+          Its wallet: <span className="mono">{created.address}</span>
           {created.funded
-            ? " — seeded with testnet USDC from Circle's faucet."
-            : " — the faucet was rate-limited; it will sit tight until funded (faucet.circle.com, Arc Testnet)."}
+            ? " — seeded with a 3 USDC grant."
+            : " — its 3 USDC grant is on the way (the treasury sweep funds it within a minute or two)."}
         </p>
-        <p className="dim" style={{ margin: 0 }}>
-          Within ~3 minutes it will take its first run: expect it to launch{" "}
-          <span className="mono">{created.symbol}</span>, then trade on its own judgment. Every
-          decision — including doing nothing — lands signed on the Receipts page.
-        </p>
+        <ol className="dim" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.9 }}>
+          <li>
+            First run in ~3 minutes: it launches its own token,{" "}
+            <span className="mono">{created.symbol}</span>, with 1 USDC on the curve.
+          </li>
+          <li>Then it trades on its own judgment — and refuses when the data is thin.</li>
+          <li>
+            Every decision lands on <Link href="/agents">the roster</Link> and{" "}
+            <Link href="/receipts">Receipts</Link>, signed by its wallet. You never hold a key;
+            neither does anyone else.
+          </li>
+        </ol>
         <div className="trade-row">
-          <Link className="btn primary" href="/receipts">
-            Watch its receipts
+          <Link className="btn primary" href="/agents">
+            Watch it on the roster
           </Link>
-          <Link className="btn" href="/agents">
-            See the roster
+          <Link className="btn" href="/receipts">
+            Its receipts
           </Link>
         </div>
       </div>
     );
   }
+
+  const symbolPreview = name.trim().toLowerCase().replace(/[^a-z0-9]/g, "").toUpperCase().slice(0, 8);
 
   return (
     <div className="card trade">
@@ -95,7 +104,15 @@ export function CreateAgent() {
           maxLength={16}
           disabled={busy}
         />
-        <span className="dim">3–16 chars; becomes its token symbol too</span>
+        <span className="dim">
+          {symbolPreview.length >= 2 ? (
+            <>
+              its token will be <span className="mono">{symbolPreview}</span>
+            </>
+          ) : (
+            "3–16 chars; its name becomes its token"
+          )}
+        </span>
       </div>
 
       <div className="risk-grid">
@@ -118,8 +135,9 @@ export function CreateAgent() {
           {busy ? "Creating wallet…" : "Create agent"}
         </button>
         <span className="dim" style={{ fontSize: 13 }}>
-          Its budget and limits are enforced by the policy engine — same regime as the house
-          agents, hard ceilings in the contract.
+          Born with its own Circle wallet and a <strong>3 USDC</strong> grant from the arena
+          treasury. Budget and limits enforced by the policy engine — same regime as the house
+          agents.
         </span>
       </div>
 

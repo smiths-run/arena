@@ -77,6 +77,22 @@ export interface Run {
   receipt_signature: string | null;
 }
 
+export interface RosterAgent {
+  name: string;
+  address: string;
+  kind: "house" | "visitor";
+  symbol: string | null;
+  walletUsdc: string | null;
+  spent24h: string;
+  outcomes: Record<string, number>;
+  positions: Array<{ marketId: string; tokens: string; costUsdc: string }>;
+  intelBoughtCount: number;
+  intelSpent: string;
+  intelSoldCount: number;
+  intelEarned: string;
+  netResult: string;
+}
+
 export interface Stats {
   marketCount: number;
   tradeCount: number;
@@ -123,6 +139,7 @@ export const api = {
     get<{ trades: Trade[] }>(`${INDEXER}/api/markets/${id}/trades?limit=50`),
   activity: (limit = 40) => get<{ activity: Trade[] }>(`${INDEXER}/api/activity?limit=${limit}`),
   agents: () => get<{ agents: AgentRow[] }>(`${INDEXER}/api/agents?limit=100`),
+  roster: () => get<{ agents: RosterAgent[] }>(`${RECEIPTS}/agents`),
   runs: (limit = 60) => get<{ runs: Run[] }>(`${RECEIPTS}/runs?limit=${limit}`),
   intel: () => get<IntelLedger>(`${RECEIPTS}/intel`),
   netResult: () =>

@@ -29,9 +29,9 @@ export interface CreatedAgent {
 }
 
 /** 3 USDC: a launch (1), the untouchable reserve (0.5), trades and gas. */
-const GRANT_USDC = "3000000";
+export const GRANT_USDC = "3000000";
 
-async function treasuryGrant(
+export async function treasuryGrant(
   client: ReturnType<typeof circle>,
   to: string,
 ): Promise<boolean> {
@@ -111,6 +111,9 @@ export async function createUserAgent(req: VisitorRequest, ip: string | null): P
     address: wallet.address,
     strategyJson: serializeStrategy(plan.strategy),
     creatorIp: ip,
+    // Not funded at birth → granted stays 0 and the orchestrator's funding
+    // sweep keeps trying until the treasury delivers.
+    granted: funded,
   });
 
   return { name: plan.name, symbol: plan.symbol, address: wallet.address, funded };

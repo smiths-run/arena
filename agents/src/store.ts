@@ -164,6 +164,23 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+`);
+
+// Additive migration: whether a visitor agent has received its treasury
+// grant. Rows that predate the column are 0, which makes the funding sweep
+// look at them — exactly right for agents created before the treasury existed.
+{
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info(user_agents)").all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    ),
+  );
+  if (!cols.has("granted")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN granted INTEGER NOT NULL DEFAULT 0");
+  }
+}
+
+db.exec(`
 
   -- Inference is a cost, so it gets a ledger like every other cost: one row
   -- per LLM call, and the daily cap is counted from here.
@@ -565,11 +582,30 @@ export function userAgentCreate(row: {
   address: string;
   strategyJson: string;
   creatorIp: string | null;
+  granted: boolean;
 }): void {
   db.prepare(
-    `INSERT INTO user_agents (name, wallet_id, address, strategy, creator_ip, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(row.name, row.walletId, row.address, row.strategyJson, row.creatorIp, Date.now());
+    `INSERT INTO user_agents (name, wallet_id, address, strategy, creator_ip, granted, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    row.name,
+    row.walletId,
+    row.address,
+    row.strategyJson,
+    row.creatorIp,
+    row.granted ? 1 : 0,
+    Date.now(),
+  );
+}
+
+export function userAgentsUngranted(): UserAgentRow[] {
+  return db
+    .prepare("SELECT * FROM user_agents WHERE active = 1 AND granted = 0 ORDER BY created_at")
+    .all() as unknown as UserAgentRow[];
+}
+
+export function userAgentMarkGranted(name: string): void {
+  db.prepare("UPDATE user_agents SET granted = 1 WHERE name = ?").run(name);
 }
 
 export function userAgents(): UserAgentRow[] {

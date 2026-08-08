@@ -60,11 +60,11 @@ export async function signMessage(account: Address, message: string): Promise<`0
   return wallet.signMessage({ account, message });
 }
 
-/** Send whole-USDC from the owner's wallet to the agent; resolves on receipt. */
+/** Send USDC (decimal string, e.g. "2.5") from the owner's wallet; resolves on receipt. */
 export async function sendUsdc(
   account: Address,
   to: Address,
-  wholeUsdc: number,
+  amount: string,
 ): Promise<`0x${string}`> {
   const provider = eth();
   const wallet = createWalletClient({ chain: arcTestnet, transport: custom(provider) });
@@ -72,7 +72,7 @@ export async function sendUsdc(
   const hash = await wallet.sendTransaction({
     account,
     to,
-    value: parseUnits(String(wholeUsdc), 18),
+    value: parseUnits(amount, 18),
   });
   const receipt = await pub.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error("funding transaction reverted");

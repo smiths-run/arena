@@ -91,12 +91,16 @@ export function CreateAgent() {
     }
   };
 
-  const fund = async (amount: number) => {
-    if (!account || !created) return;
+  const [fundAmount, setFundAmount] = useState("5");
+  const fundParsed = /^\d+(\.\d{1,6})?$/.test(fundAmount.trim()) ? Number(fundAmount.trim()) : NaN;
+  const fundValid = Number.isFinite(fundParsed) && fundParsed > 0;
+
+  const fund = async () => {
+    if (!account || !created || !fundValid) return;
     setError(null);
-    setBusy(`sending ${amount} USDC…`);
+    setBusy(`sending ${fundAmount.trim()} USDC…`);
     try {
-      const tx = await sendUsdc(account, created.address as Address, amount);
+      const tx = await sendUsdc(account, created.address as Address, fundAmount.trim());
       setFundedTx(tx);
       setMyBalance(await balanceOf(account).catch(() => null));
     } catch (err) {
@@ -158,15 +162,38 @@ export function CreateAgent() {
               )}
             </p>
             <div className="trade-row">
+              <input
+                className="trade-input"
+                value={fundAmount}
+                onChange={(e) => setFundAmount(e.target.value)}
+                inputMode="decimal"
+                placeholder="amount"
+                disabled={busy !== null}
+              />
+              <span className="dim">USDC</span>
               {[3, 5, 10].map((g) => (
-                <button key={g} className="btn primary" onClick={() => fund(g)} disabled={busy !== null}>
-                  {busy ?? `Send ${g} USDC`}
+                <button
+                  key={g}
+                  className="btn tab"
+                  onClick={() => setFundAmount(String(g))}
+                  disabled={busy !== null}
+                  type="button"
+                >
+                  {g}
                 </button>
               ))}
+              <button
+                className="btn primary"
+                onClick={fund}
+                disabled={busy !== null || !fundValid}
+              >
+                {busy ?? (fundValid ? `Send ${fundAmount.trim()} USDC` : "Send")}
+              </button>
             </div>
             <p className="dim" style={{ margin: 0, fontSize: 12.5 }}>
-              Or fund it later — send USDC to its address from any wallet. It joins the arena the
-              moment it can afford to.
+              Any amount is yours to pick — below ~1.6 USDC it cannot afford its first launch and
+              will say so in its receipts. Or fund it later: send USDC to its address from any
+              wallet, and it joins the arena the moment it can afford to.
             </p>
           </>
         ) : (

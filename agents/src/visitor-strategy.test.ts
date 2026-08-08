@@ -41,6 +41,33 @@ test("bad names are refused with a reason", () => {
   }
 });
 
+test("a mission is bounded prose and switches the LLM on", () => {
+  const p = planVisitorAgent({
+    name: "briefed",
+    mission: "  Buy dips on PULSE only.\n Take profit fast. " + "x".repeat(400),
+  });
+  assert.ok(p.mission && p.mission.length <= 280, "mission is clamped to 280 chars");
+  assert.ok(!p.mission.includes(""), "control characters are swept");
+  assert.equal(p.strategy.llm.enabled, true);
+  assert.equal(p.strategy.llm.maxCallsPerDay, 30, "visitor thinking is capped");
+
+  const quiet = planVisitorAgent({ name: "quiet" });
+  assert.equal(quiet.mission, null);
+  assert.equal(quiet.strategy.llm.enabled, false, "no mission, no LLM bill");
+});
+
+test("the grant is one of the offered sizes, never arbitrary", () => {
+  assert.equal(planVisitorAgent({ name: "gr-three" }).grantUsdc, 3_000_000n);
+  assert.equal(planVisitorAgent({ name: "gr-ten", grant: 10 }).grantUsdc, 10_000_000n);
+  for (const grant of [999, -5, 3.5, "10", null]) {
+    assert.equal(
+      planVisitorAgent({ name: "gr-odd", grant }).grantUsdc,
+      3_000_000n,
+      `grant=${grant} falls back to 3`,
+    );
+  }
+});
+
 test("a strategy survives the JSON round trip with bigints intact", () => {
   const { strategy } = planVisitorAgent({ name: "roundtrip" });
   const back = deserializeStrategy(serializeStrategy(strategy));

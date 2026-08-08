@@ -99,6 +99,7 @@ test("the prompt shows the agent its limits and the market snapshot", () => {
   const input: StrategistInput = {
     agentName: "anvil",
     address: "0x1111111111111111111111111111111111111111",
+    description: "Test agent.",
     strategy: STRATEGIES.anvil,
     markets: [{ id: 3n, creator: "0x22", symbol: "PULSE", reserveUsdc: 2_000_000n, tradeCount: 7 } as never],
     recentTrades: [

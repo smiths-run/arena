@@ -28,18 +28,16 @@ export interface CreatedAgent {
   funded: boolean;
 }
 
-/** 3 USDC: a launch (1), the untouchable reserve (0.5), trades and gas. */
-export const GRANT_USDC = "3000000";
-
 export async function treasuryGrant(
   client: ReturnType<typeof circle>,
   to: string,
+  amountUsdc: bigint,
 ): Promise<boolean> {
   const created = await client.createContractExecutionTransaction({
     walletId: process.env.TREASURY_WALLET_ID!,
     contractAddress: USDC,
     abiFunctionSignature: "transfer(address,uint256)",
-    abiParameters: [to, GRANT_USDC] as never[],
+    abiParameters: [to, amountUsdc.toString()] as never[],
     fee: { type: "level", config: { feeLevel: "MEDIUM" } },
   });
   const done = await client.getTransaction({
@@ -99,7 +97,7 @@ export async function createUserAgent(req: VisitorRequest, ip: string | null): P
 
   if (!funded && process.env.TREASURY_WALLET_ID) {
     try {
-      funded = await treasuryGrant(client, wallet.address);
+      funded = await treasuryGrant(client, wallet.address, plan.grantUsdc);
     } catch (err) {
       console.log(`treasury grant failed for ${plan.name}: ${err instanceof Error ? err.message : err}`);
     }
@@ -110,6 +108,8 @@ export async function createUserAgent(req: VisitorRequest, ip: string | null): P
     walletId: wallet.id,
     address: wallet.address,
     strategyJson: serializeStrategy(plan.strategy),
+    mission: plan.mission,
+    grantUsdc: plan.grantUsdc,
     creatorIp: ip,
     // Not funded at birth → granted stays 0 and the orchestrator's funding
     // sweep keeps trying until the treasury delivers.

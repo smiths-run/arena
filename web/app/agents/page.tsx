@@ -30,6 +30,11 @@ function RosterTable({ agents }: { agents: RosterAgent[] }) {
               <tr key={a.name}>
                 <td>
                   <strong>{a.name}</strong>
+                  {a.mission && (
+                    <div className="dim" style={{ fontSize: 12, maxWidth: 260 }} title={a.mission}>
+                      “{a.mission.length > 70 ? `${a.mission.slice(0, 70)}…` : a.mission}”
+                    </div>
+                  )}
                 </td>
                 <td className="mono">{a.symbol ?? "—"}</td>
                 <td className="mono">

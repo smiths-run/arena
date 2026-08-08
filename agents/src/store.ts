@@ -178,6 +178,12 @@ db.exec(`
   if (!cols.has("granted")) {
     db.exec("ALTER TABLE user_agents ADD COLUMN granted INTEGER NOT NULL DEFAULT 0");
   }
+  if (!cols.has("mission")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN mission TEXT");
+  }
+  if (!cols.has("grant_usdc")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN grant_usdc TEXT NOT NULL DEFAULT '3000000'");
+  }
 }
 
 db.exec(`
@@ -572,6 +578,8 @@ export interface UserAgentRow {
   wallet_id: string;
   address: string;
   strategy: string;
+  mission: string | null;
+  grant_usdc: string;
   active: number;
   created_at: number;
 }
@@ -581,17 +589,21 @@ export function userAgentCreate(row: {
   walletId: string;
   address: string;
   strategyJson: string;
+  mission: string | null;
+  grantUsdc: bigint;
   creatorIp: string | null;
   granted: boolean;
 }): void {
   db.prepare(
-    `INSERT INTO user_agents (name, wallet_id, address, strategy, creator_ip, granted, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO user_agents (name, wallet_id, address, strategy, mission, grant_usdc, creator_ip, granted, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.name,
     row.walletId,
     row.address,
     row.strategyJson,
+    row.mission,
+    row.grantUsdc.toString(),
     row.creatorIp,
     row.granted ? 1 : 0,
     Date.now(),

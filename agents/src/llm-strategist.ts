@@ -17,7 +17,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Strategist } from "./strategist.ts";
 import { heuristicStrategist } from "./strategist.ts";
 import { PROPOSAL_SCHEMA, buildPrompt, toAction, type Proposal } from "./proposal.ts";
-import { AGENTS } from "./shared.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 
@@ -53,9 +52,11 @@ export const llmStrategist: Strategist = async (input) => {
       ? await obs.claimableFees(input.address)
       : [];
 
-    const description =
-      AGENTS.find((a) => a.name === input.agentName)?.description ?? "An autonomous agent.";
-    const { system, user } = buildPrompt(input, { description, positions: valued, claimable });
+    const { system, user } = buildPrompt(input, {
+      description: input.description,
+      positions: valued,
+      claimable,
+    });
 
     const res = await client.messages.create({
       model: MODEL,

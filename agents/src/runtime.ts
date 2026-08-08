@@ -102,6 +102,7 @@ export async function runOnce(
     const action = await strategist({
       agentName,
       address: agent.address,
+      description: agent.description,
       strategy,
       markets,
       recentTrades,

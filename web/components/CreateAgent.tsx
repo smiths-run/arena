@@ -31,6 +31,8 @@ type Created = { name: string; symbol: string; address: string; funded: boolean 
 export function CreateAgent() {
   const [name, setName] = useState("");
   const [risk, setRisk] = useState<string>("balanced");
+  const [mission, setMission] = useState("");
+  const [grant, setGrant] = useState<number>(3);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<Created | null>(null);
@@ -42,7 +44,7 @@ export function CreateAgent() {
       const res = await fetch("/api/runs/agents/create", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, risk }),
+        body: JSON.stringify({ name, risk, mission: mission.trim() || undefined, grant }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? `creation failed (${res.status})`);
@@ -63,8 +65,8 @@ export function CreateAgent() {
         <p className="dim" style={{ margin: 0 }}>
           Its wallet: <span className="mono">{created.address}</span>
           {created.funded
-            ? " — seeded with a 3 USDC grant."
-            : " — its 3 USDC grant is on the way (the treasury sweep funds it within a minute or two)."}
+            ? ` — seeded with a ${grant} USDC grant.`
+            : ` — its ${grant} USDC grant is on the way (the treasury sweep funds it within a minute or two).`}
         </p>
         <ol className="dim" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.9 }}>
           <li>
@@ -130,14 +132,47 @@ export function CreateAgent() {
         ))}
       </div>
 
+      <div>
+        <textarea
+          className="trade-input"
+          style={{ width: "100%", minHeight: 72, fontFamily: "inherit", resize: "vertical" }}
+          placeholder={`mission (optional) — how should it behave? e.g. "Be patient. Only buy markets with real outside flow, take profit early, and never chase a pump."`}
+          value={mission}
+          onChange={(e) => setMission(e.target.value)}
+          maxLength={280}
+          disabled={busy}
+        />
+        <div className="dim" style={{ fontSize: 12.5, marginTop: 4 }}>
+          With a mission, your agent <strong>thinks with Claude</strong> on every run and its
+          reasoning lands in the receipts (capped at 30 thoughts a day). Without one it runs on
+          plain rules. Either way the risk limits above bind — a mission can want things; it
+          cannot spend past the policy engine. {mission.length > 0 && `${mission.length}/280`}
+        </div>
+      </div>
+
+      <div className="trade-row">
+        <span className="dim" style={{ fontSize: 13 }}>Starting budget:</span>
+        {[3, 5, 10].map((g) => (
+          <button
+            key={g}
+            className={`btn tab ${grant === g ? "active" : ""}`}
+            onClick={() => setGrant(g)}
+            disabled={busy}
+            type="button"
+          >
+            {g} USDC
+          </button>
+        ))}
+        <span className="dim" style={{ fontSize: 13 }}>granted from the arena treasury</span>
+      </div>
+
       <div className="trade-row">
         <button className="btn primary" onClick={submit} disabled={busy || name.trim().length < 3}>
           {busy ? "Creating wallet…" : "Create agent"}
         </button>
         <span className="dim" style={{ fontSize: 13 }}>
-          Born with its own Circle wallet and a <strong>3 USDC</strong> grant from the arena
-          treasury. Budget and limits enforced by the policy engine — same regime as the house
-          agents.
+          Born with its own Circle wallet — no keys, no signup. Budget and limits enforced by the
+          policy engine, same regime as the house agents.
         </span>
       </div>
 

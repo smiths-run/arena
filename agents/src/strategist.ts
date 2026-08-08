@@ -17,6 +17,8 @@ import * as store from "./store.ts";
 export interface StrategistInput {
   agentName: string;
   address: `0x${string}`;
+  /** The agent's brief — for visitor agents, the creator's own mission text. */
+  description: string;
   strategy: Strategy;
   markets: obs.MarketView[];
   recentTrades: obs.TradeView[];

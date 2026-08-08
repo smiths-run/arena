@@ -5,8 +5,9 @@
  * A visitor tunes risk inside clamps; they cannot loosen anything the house
  * agents live under. Whatever they type, the resulting strategy is bounded:
  * trade size, daily spend, impact, reserve — all within the same policy-engine
- * regime, all below the contract's own hard ceilings. The LLM stays off for
- * visitor agents (inference is our bill), and their launch name is their own
+ * regime, all below the contract's own hard ceilings. A mission unlocks the
+ * LLM strategist (capped per day — inference is our bill); the mission is
+ * prose the model reads, never policy. The launch name is the agent's own
  * name — an agent launches its token, like the reference product.
  */
 import type { Strategy } from "./config.ts";
@@ -19,13 +20,21 @@ export interface VisitorRequest {
   name?: unknown;
   /** "cautious" | "balanced" | "bold" */
   risk?: unknown;
+  /** Free-text mission, ≤280 chars. Read by the LLM strategist; never by the policy engine. */
+  mission?: unknown;
+  /** Treasury grant in whole USDC: 3, 5 or 10. */
+  grant?: unknown;
 }
 
 export interface VisitorPlan {
   name: string;
   symbol: string;
+  mission: string | null;
+  grantUsdc: bigint;
   strategy: Strategy;
 }
+
+export const GRANT_CHOICES_USDC = [3, 5, 10] as const;
 
 const RISKS = {
   cautious: { maxTradeUsdc: 500_000n, takeProfitBps: 300n, stopLossBps: 1_000n, minExternalTrades: 2 },
@@ -54,6 +63,22 @@ export function planVisitorAgent(req: VisitorRequest): VisitorPlan {
   const symbol = name.replace(/[^a-z0-9]/g, "").toUpperCase().slice(0, 8);
   if (symbol.length < 2) throw new Error("name must contain at least 2 letters/digits");
 
+  // The mission is prose for the model, never policy: whatever it says, the
+  // clamps below and the policy engine still bind. Control characters out,
+  // length bounded, empty means none.
+  let mission: string | null = null;
+  if (req.mission !== undefined && req.mission !== null && req.mission !== "") {
+    if (typeof req.mission !== "string") throw new Error("mission must be text");
+    mission = req.mission.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 280);
+    if (mission.length === 0) mission = null;
+  }
+
+  const grantWhole =
+    typeof req.grant === "number" && (GRANT_CHOICES_USDC as readonly number[]).includes(req.grant)
+      ? req.grant
+      : 3;
+  const grantUsdc = BigInt(grantWhole) * 1_000_000n;
+
   const strategy: Strategy = {
     allowedActions: ["launch", "buy", "sell", "claim"],
     maxTradeUsdc: r.maxTradeUsdc,
@@ -69,11 +94,13 @@ export function planVisitorAgent(req: VisitorRequest): VisitorPlan {
     launchBuyUsdc: 1_000_000n,
     cooldownSeconds: 180,
     paidIntel: { enabled: false, maxCostUsdc: 0n },
-    llm: { enabled: false, maxCallsPerDay: 0 },
+    // A mission only has teeth if something reads it: agents with one think
+    // with the LLM (tightly capped); without one, the heuristic is enough.
+    llm: { enabled: mission !== null, maxCallsPerDay: 30 },
     launchNames: [{ name, symbol }],
   };
 
-  return { name, symbol, strategy };
+  return { name, symbol, mission, grantUsdc, strategy };
 }
 
 // Strategy travels to sqlite as JSON; bigints become tagged strings and come

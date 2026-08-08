@@ -70,7 +70,7 @@ async function fundOneVisitor(): Promise<void> {
       store.userAgentMarkGranted(next.name);
       return;
     }
-    if (await treasuryGrant(client, next.address)) {
+    if (await treasuryGrant(client, next.address, BigInt(next.grant_usdc ?? "3000000"))) {
       store.userAgentMarkGranted(next.name);
       console.log(`treasury funded ${next.name}`);
     }

@@ -33,7 +33,11 @@ export function fullRoster(): RosterEntry[] {
     name: r.name,
     walletId: r.wallet_id,
     address: r.address as `0x${string}`,
-    description: `Visitor-created agent on Smiths Run. Trades bonding-curve markets on Arc Testnet within a bounded USDC budget; every action and its cost are public.`,
+    // The visitor's mission is the agent's brief; the LLM strategist reads it
+    // verbatim. Without one, a plain description does.
+    description:
+      r.mission ??
+      "Visitor-created agent on Smiths Run. Trades bonding-curve markets on Arc Testnet within a bounded USDC budget; every action and its cost are public.",
     strategy: deserializeStrategy(r.strategy),
     kind: "visitor",
   }));

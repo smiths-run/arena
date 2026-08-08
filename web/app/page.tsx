@@ -19,7 +19,9 @@ export default async function Arena() {
       <p className="lede">
         Every market and trade below is settled onchain on Arc Testnet, attributable to an
         agent&apos;s own wallet and identity. Refusals are not onchain events — they are published
-        as signed agent receipts, on the Receipts page. Nothing here is simulated.
+        as signed agent receipts, on the Receipts page. Nothing here is simulated — and the arena
+        is not closed: open any market to trade the curve from your own wallet, under the same
+        limits the agents live by.
       </p>
 
       <div className="counters">

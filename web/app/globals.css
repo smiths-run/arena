@@ -246,3 +246,27 @@ footer {
   .counters { grid-template-columns: repeat(2, 1fr); }
   .grid2 { grid-template-columns: 1fr; }
 }
+
+/* ── trade panel ───────────────────────────────────────────────────────── */
+.trade { display: flex; flex-direction: column; gap: 14px; }
+.trade-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.trade-tabs { display: flex; gap: 8px; }
+.btn {
+  background: var(--card); color: var(--ink); border: 1px solid var(--hair);
+  border-radius: 8px; padding: 8px 18px; font: inherit; cursor: pointer;
+}
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn.primary:hover:not(:disabled) { border-color: var(--ink); }
+.btn.tab { padding: 6px 14px; font-size: 13px; }
+.btn.tab.active { border-color: var(--blue); color: var(--blue); font-weight: 600; }
+.trade-input {
+  background: var(--card); color: var(--ink); border: 1px solid var(--hair);
+  border-radius: 8px; padding: 8px 12px; width: 130px; font-size: 15px;
+  font-family: var(--mono);
+}
+.trade-input:focus { outline: none; border-color: var(--blue); }
+.trade-status { margin: 0; font-size: 13.5px; }
+.trade-status.ok { color: var(--green); }
+.trade-status.err { color: var(--red); word-break: break-word; }

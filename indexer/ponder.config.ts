@@ -23,6 +23,11 @@ export default createConfig({
         "https://rpc.testnet.arc.network",
         "https://rpc.quicknode.testnet.arc.network",
       ],
+      // Measured, not guessed: these endpoints accept 10k-block getLogs ranges
+      // but rate-limit past ~1-2 requests/second. Ponder's default of 50 rps
+      // triggers a 429 storm, which collapses its ranges and leaves the sync
+      // crawling for days. Polite is fast here.
+      maxRequestsPerSecond: 5,
     },
   },
   contracts: {

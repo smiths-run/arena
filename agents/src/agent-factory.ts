@@ -9,7 +9,7 @@
  * faucet declines, the agent still exists — it just waits, and its runs say
  * so in public like every other refusal.
  */
-import { circle } from "./shared.ts";
+import { USDC, circle } from "./shared.ts";
 import {
   MAX_PER_IP_PER_DAY,
   MAX_USER_AGENTS,
@@ -26,6 +26,28 @@ export interface CreatedAgent {
   symbol: string;
   address: string;
   funded: boolean;
+}
+
+/** 3 USDC: a launch (1), the untouchable reserve (0.5), trades and gas. */
+const GRANT_USDC = "3000000";
+
+async function treasuryGrant(
+  client: ReturnType<typeof circle>,
+  to: string,
+): Promise<boolean> {
+  const created = await client.createContractExecutionTransaction({
+    walletId: process.env.TREASURY_WALLET_ID!,
+    contractAddress: USDC,
+    abiFunctionSignature: "transfer(address,uint256)",
+    abiParameters: [to, GRANT_USDC] as never[],
+    fee: { type: "level", config: { feeLevel: "MEDIUM" } },
+  });
+  const done = await client.getTransaction({
+    id: created.data!.id!,
+    waitForState: "COMPLETE",
+    pollingInterval: 500,
+  });
+  return done.data?.transaction?.state === "COMPLETE";
 }
 
 export async function createUserAgent(req: VisitorRequest, ip: string | null): Promise<CreatedAgent> {
@@ -58,8 +80,10 @@ export async function createUserAgent(req: VisitorRequest, ip: string | null): P
   const wallet = created.data?.wallets?.[0];
   if (!wallet?.id || !wallet.address) throw new Error("circle returned no wallet");
 
-  // Funding is best-effort: the faucet rate-limits per address, and an
-  // unfunded agent is not an error — its runs will publicly say it is broke.
+  // Funding, best-effort and layered: Circle's programmatic faucet first (it
+  // has been Forbidden lately, but policies change back), then a grant from
+  // the visitor treasury — a wallet a human refills from the web faucet. An
+  // unfunded agent is not an error; its runs will publicly say it is broke.
   let funded = false;
   try {
     await client.requestTestnetTokens({
@@ -69,8 +93,16 @@ export async function createUserAgent(req: VisitorRequest, ip: string | null): P
       usdc: true,
     });
     funded = true;
-  } catch {
-    funded = false;
+  } catch (err) {
+    console.log(`faucet declined for ${plan.name}: ${err instanceof Error ? err.message : err}`);
+  }
+
+  if (!funded && process.env.TREASURY_WALLET_ID) {
+    try {
+      funded = await treasuryGrant(client, wallet.address);
+    } catch (err) {
+      console.log(`treasury grant failed for ${plan.name}: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   store.userAgentCreate({

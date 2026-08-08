@@ -83,6 +83,7 @@ export interface RosterAgent {
   kind: "house" | "visitor";
   symbol: string | null;
   mission?: string | null;
+  owner?: string | null;
   walletUsdc: string | null;
   spent24h: string;
   outcomes: Record<string, number>;

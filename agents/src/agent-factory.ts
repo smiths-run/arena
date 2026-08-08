@@ -1,14 +1,15 @@
 /**
- * Visitor agent creation: one Circle wallet, one faucet request, one row.
+ * Visitor agent creation: prove you own a wallet, and the agent is yours.
  *
- * The custody model is identical to the house agents — the visitor never sees
- * a private key because there is none to see; the wallet is developer-
- * controlled and the policy engine governs what it may sign. Funding comes
- * from Circle's programmatic faucet (20 USDC per address per 2h), so a
- * visitor goes from a name to a funded, running agent in one request. If the
- * faucet declines, the agent still exists — it just waits, and its runs say
- * so in public like every other refusal.
+ * The creator connects a wallet on the site and signs a one-line message;
+ * that signature is the whole identity system. The agent gets its own
+ * developer-controlled Circle wallet (nobody ever sees a key), the creator's
+ * address is recorded as its owner, and funding is the owner's business: they
+ * send USDC from their own wallet to the agent's address — the arena grants
+ * nothing. An unfunded agent is not an error; its runs say in public that it
+ * is broke until its owner feeds it.
  */
+import { verifyMessage } from "viem";
 import { USDC, circle } from "./shared.ts";
 import {
   MAX_PER_IP_PER_DAY,
@@ -21,42 +22,49 @@ import * as store from "./store.ts";
 
 const WALLET_SET_KEY = "visitor_wallet_set_id";
 
+/** The exact text the creator signs; the name binds the signature to one agent. */
+export function creationMessage(name: string): string {
+  return `Smiths Run: create agent "${name}"`;
+}
+
 export interface CreatedAgent {
   name: string;
   symbol: string;
   address: string;
-  funded: boolean;
+  owner: string;
 }
 
-export async function treasuryGrant(
-  client: ReturnType<typeof circle>,
-  to: string,
-  amountUsdc: bigint,
-): Promise<boolean> {
-  const created = await client.createContractExecutionTransaction({
-    walletId: process.env.TREASURY_WALLET_ID!,
-    contractAddress: USDC,
-    abiFunctionSignature: "transfer(address,uint256)",
-    abiParameters: [to, amountUsdc.toString()] as never[],
-    fee: { type: "level", config: { feeLevel: "MEDIUM" } },
-  });
-  const done = await client.getTransaction({
-    id: created.data!.id!,
-    waitForState: "COMPLETE",
-    pollingInterval: 500,
-  });
-  return done.data?.transaction?.state === "COMPLETE";
-}
-
-export async function createUserAgent(req: VisitorRequest, ip: string | null): Promise<CreatedAgent> {
+export async function createUserAgent(
+  req: VisitorRequest & { owner?: unknown; signature?: unknown },
+  ip: string | null,
+): Promise<CreatedAgent> {
   const plan = planVisitorAgent(req);
+
+  // Ownership: a wallet signature over the creation message, verified here.
+  // No accounts, no passwords — the chain's own identity primitive.
+  if (typeof req.owner !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(req.owner)) {
+    throw new Error("connect a wallet first — the agent needs an owner");
+  }
+  if (typeof req.signature !== "string" || !req.signature.startsWith("0x")) {
+    throw new Error("missing ownership signature");
+  }
+  const owner = req.owner.toLowerCase();
+  const valid = await verifyMessage({
+    address: req.owner as `0x${string}`,
+    message: creationMessage(plan.name),
+    signature: req.signature as `0x${string}`,
+  }).catch(() => false);
+  if (!valid) throw new Error("ownership signature does not verify");
 
   if (store.userAgentByName(plan.name)) throw new Error(`"${plan.name}" already exists`);
   if (store.userAgentCount() >= MAX_USER_AGENTS) {
     throw new Error("the visitor roster is full for now");
   }
-  if (ip && store.userAgentsCreatedBy(ip, 24 * 3600 * 1000) >= MAX_PER_IP_PER_DAY) {
-    throw new Error(`limit reached: ${MAX_PER_IP_PER_DAY} agents per day`);
+  if (store.userAgentsOwnedBy(owner, 24 * 3600 * 1000) >= MAX_PER_IP_PER_DAY) {
+    throw new Error(`limit reached: ${MAX_PER_IP_PER_DAY} agents per wallet per day`);
+  }
+  if (ip && store.userAgentsCreatedBy(ip, 24 * 3600 * 1000) >= MAX_PER_IP_PER_DAY * 2) {
+    throw new Error("limit reached for today");
   }
 
   const client = circle();
@@ -78,43 +86,39 @@ export async function createUserAgent(req: VisitorRequest, ip: string | null): P
   const wallet = created.data?.wallets?.[0];
   if (!wallet?.id || !wallet.address) throw new Error("circle returned no wallet");
 
-  // Funding, best-effort and layered: Circle's programmatic faucet first (it
-  // has been Forbidden lately, but policies change back), then a grant from
-  // the visitor treasury — a wallet a human refills from the web faucet. An
-  // unfunded agent is not an error; its runs will publicly say it is broke.
-  let funded = false;
-  try {
-    await client.requestTestnetTokens({
-      address: wallet.address,
-      blockchain: "ARC-TESTNET" as never,
-      native: true,
-      usdc: true,
-    });
-    funded = true;
-  } catch (err) {
-    console.log(`faucet declined for ${plan.name}: ${err instanceof Error ? err.message : err}`);
-  }
-
-  if (!funded && process.env.TREASURY_WALLET_ID) {
-    try {
-      funded = await treasuryGrant(client, wallet.address, plan.grantUsdc);
-    } catch (err) {
-      console.log(`treasury grant failed for ${plan.name}: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
   store.userAgentCreate({
     name: plan.name,
     walletId: wallet.id,
     address: wallet.address,
     strategyJson: serializeStrategy(plan.strategy),
     mission: plan.mission,
-    grantUsdc: plan.grantUsdc,
+    owner,
     creatorIp: ip,
-    // Not funded at birth → granted stays 0 and the orchestrator's funding
-    // sweep keeps trying until the treasury delivers.
-    granted: funded,
   });
 
-  return { name: plan.name, symbol: plan.symbol, address: wallet.address, funded };
+  return { name: plan.name, symbol: plan.symbol, address: wallet.address, owner };
+}
+
+/**
+ * A grant from the ops treasury — not part of the product flow (owners fund
+ * their own agents), kept for seeding house demos when TREASURY_SWEEP=1.
+ */
+export async function treasuryGrant(
+  client: ReturnType<typeof circle>,
+  to: string,
+  amountUsdc: bigint,
+): Promise<boolean> {
+  const created = await client.createContractExecutionTransaction({
+    walletId: process.env.TREASURY_WALLET_ID!,
+    contractAddress: USDC,
+    abiFunctionSignature: "transfer(address,uint256)",
+    abiParameters: [to, amountUsdc.toString()] as never[],
+    fee: { type: "level", config: { feeLevel: "MEDIUM" } },
+  });
+  const done = await client.getTransaction({
+    id: created.data!.id!,
+    waitForState: "COMPLETE",
+    pollingInterval: 500,
+  });
+  return done.data?.transaction?.state === "COMPLETE";
 }

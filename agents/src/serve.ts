@@ -116,6 +116,7 @@ const server = createServer(async (req, res) => {
         kind: a.kind,
         symbol: a.strategy.launchNames?.[0]?.symbol ?? null,
         mission: a.kind === "visitor" ? (store.userAgentByName(a.name)?.mission ?? null) : null,
+        owner: a.kind === "visitor" ? (store.userAgentByName(a.name)?.owner ?? null) : null,
         walletUsdc: await balanceOf(a.address),
         spent24h: store.spentLast24h(a.name).toString(),
         outcomes: Object.fromEntries(outcomes.map((o) => [o.outcome, o.n])),

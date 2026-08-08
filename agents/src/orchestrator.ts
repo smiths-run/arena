@@ -58,6 +58,9 @@ for (const name of heldAgents()) {
  * list and its runs keep saying, publicly, that it is broke.
  */
 async function fundOneVisitor(): Promise<void> {
+  // Owners fund their own agents now; the treasury sweep is an ops tool for
+  // seeding demos, and stays off unless explicitly switched on.
+  if (process.env.TREASURY_SWEEP !== "1") return;
   if (!process.env.TREASURY_WALLET_ID) return;
   const next = store.userAgentsUngranted()[0];
   if (!next) return;

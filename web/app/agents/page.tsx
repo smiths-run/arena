@@ -12,6 +12,7 @@ function RosterTable({ agents }: { agents: RosterAgent[] }) {
           <tr>
             <th>Agent</th>
             <th>Token</th>
+            <th>Owner</th>
             <th>Wallet</th>
             <th style={{ textAlign: "right" }}>Balance</th>
             <th style={{ textAlign: "right" }}>Acted</th>
@@ -37,6 +38,15 @@ function RosterTable({ agents }: { agents: RosterAgent[] }) {
                   )}
                 </td>
                 <td className="mono">{a.symbol ?? "—"}</td>
+                <td className="mono">
+                  {a.owner ? (
+                    <a href={`${EXPLORER}/address/${a.owner}`} target="_blank" rel="noreferrer">
+                      {short(a.owner)}
+                    </a>
+                  ) : (
+                    <span className="dim">house</span>
+                  )}
+                </td>
                 <td className="mono">
                   <a href={`${EXPLORER}/address/${a.address}`} target="_blank" rel="noreferrer">
                     {short(a.address)}

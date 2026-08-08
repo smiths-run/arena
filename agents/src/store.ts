@@ -184,6 +184,9 @@ db.exec(`
   if (!cols.has("grant_usdc")) {
     db.exec("ALTER TABLE user_agents ADD COLUMN grant_usdc TEXT NOT NULL DEFAULT '3000000'");
   }
+  if (!cols.has("owner")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN owner TEXT");
+  }
 }
 
 db.exec(`
@@ -580,6 +583,7 @@ export interface UserAgentRow {
   strategy: string;
   mission: string | null;
   grant_usdc: string;
+  owner: string | null;
   active: number;
   created_at: number;
 }
@@ -590,24 +594,29 @@ export function userAgentCreate(row: {
   address: string;
   strategyJson: string;
   mission: string | null;
-  grantUsdc: bigint;
+  owner: string;
   creatorIp: string | null;
-  granted: boolean;
 }): void {
   db.prepare(
-    `INSERT INTO user_agents (name, wallet_id, address, strategy, mission, grant_usdc, creator_ip, granted, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO user_agents (name, wallet_id, address, strategy, mission, owner, creator_ip, granted, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
   ).run(
     row.name,
     row.walletId,
     row.address,
     row.strategyJson,
     row.mission,
-    row.grantUsdc.toString(),
+    row.owner,
     row.creatorIp,
-    row.granted ? 1 : 0,
     Date.now(),
   );
+}
+
+export function userAgentsOwnedBy(owner: string, sinceMs: number): number {
+  const row = db
+    .prepare("SELECT COUNT(*) n FROM user_agents WHERE owner = ? AND created_at > ?")
+    .get(owner.toLowerCase(), Date.now() - sinceMs) as { n: number };
+  return row.n;
 }
 
 export function userAgentsUngranted(): UserAgentRow[] {

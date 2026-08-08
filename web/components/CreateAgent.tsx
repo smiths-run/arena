@@ -1,12 +1,17 @@
 "use client";
 
 /**
- * The visitor's one write: name + temperament in, a funded autonomous agent
- * out. The server clamps everything; this form is a thin, honest front on
- * POST /agents/create.
+ * Deploy an agent in three honest steps: connect (the wallet is your
+ * profile), sign & create (one signature proves the agent is yours), fund
+ * (USDC moves from your wallet to its wallet — the arena grants nothing).
+ * Trading stays agent-only; your wallet deploys and feeds, never places
+ * orders.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import type { Address } from "viem";
+import { connectWallet, sendUsdc, signMessage, balanceOf } from "@/lib/wallet";
+import { short, usdc as fmtUsdc } from "@/lib/api";
 
 const RISKS = [
   {
@@ -26,25 +31,55 @@ const RISKS = [
   },
 ] as const;
 
-type Created = { name: string; symbol: string; address: string; funded: boolean };
+type Created = { name: string; symbol: string; address: string; owner: string };
 
 export function CreateAgent() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const hasWallet = mounted && Boolean((window as any).ethereum);
+
+  const [account, setAccount] = useState<Address | null>(null);
+  const [myBalance, setMyBalance] = useState<bigint | null>(null);
   const [name, setName] = useState("");
   const [risk, setRisk] = useState<string>("balanced");
   const [mission, setMission] = useState("");
-  const [grant, setGrant] = useState<number>(3);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<Created | null>(null);
+  const [fundedTx, setFundedTx] = useState<string | null>(null);
 
-  const submit = async () => {
-    setBusy(true);
+  const connect = async () => {
+    setError(null);
+    setBusy("connecting…");
+    try {
+      const addr = await connectWallet();
+      setAccount(addr);
+      setMyBalance(await balanceOf(addr).catch(() => null));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const create = async () => {
+    if (!account) return;
     setError(null);
     try {
+      const clean = name.trim().toLowerCase();
+      setBusy("waiting for your signature…");
+      const signature = await signMessage(account, `Smiths Run: create agent "${clean}"`);
+      setBusy("creating its wallet…");
       const res = await fetch("/api/runs/agents/create", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, risk, mission: mission.trim() || undefined, grant }),
+        body: JSON.stringify({
+          name: clean,
+          risk,
+          mission: mission.trim() || undefined,
+          owner: account,
+          signature,
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? `creation failed (${res.status})`);
@@ -52,50 +87,154 @@ export function CreateAgent() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
-  if (created) {
+  const fund = async (amount: number) => {
+    if (!account || !created) return;
+    setError(null);
+    setBusy(`sending ${amount} USDC…`);
+    try {
+      const tx = await sendUsdc(account, created.address as Address, amount);
+      setFundedTx(tx);
+      setMyBalance(await balanceOf(account).catch(() => null));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const symbolPreview = name.trim().toLowerCase().replace(/[^a-z0-9]/g, "").toUpperCase().slice(0, 8);
+
+  if (!hasWallet) {
     return (
       <div className="card trade">
-        <h2 style={{ margin: 0 }}>
-          {created.name} is alive{created.funded ? " — and funded." : "."}
-        </h2>
         <p className="dim" style={{ margin: 0 }}>
-          Its wallet: <span className="mono">{created.address}</span>
-          {created.funded
-            ? ` — seeded with a ${grant} USDC grant.`
-            : ` — its ${grant} USDC grant is on the way (the treasury sweep funds it within a minute or two).`}
+          Deploying an agent needs a browser wallet (MetaMask or Rabby) — the wallet is your
+          profile: it owns the agent and funds it. Install one, get test USDC from{" "}
+          <a href="https://faucet.circle.com" target="_blank" rel="noreferrer">
+            Circle&apos;s faucet
+          </a>{" "}
+          (pick Arc Testnet, paste your own address), then refresh this page.
         </p>
-        <ol className="dim" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.9 }}>
-          <li>
-            First run in ~3 minutes: it launches its own token,{" "}
-            <span className="mono">{created.symbol}</span>, with 1 USDC on the curve.
-          </li>
-          <li>Then it trades on its own judgment — and refuses when the data is thin.</li>
-          <li>
-            Every decision lands on <Link href="/agents">the roster</Link> and{" "}
-            <Link href="/receipts">Receipts</Link>, signed by its wallet. You never hold a key;
-            neither does anyone else.
-          </li>
-        </ol>
-        <div className="trade-row">
-          <Link className="btn primary" href="/agents">
-            Watch it on the roster
-          </Link>
-          <Link className="btn" href="/receipts">
-            Its receipts
-          </Link>
-        </div>
       </div>
     );
   }
 
-  const symbolPreview = name.trim().toLowerCase().replace(/[^a-z0-9]/g, "").toUpperCase().slice(0, 8);
+  // Step 3 — fund it from the owner's wallet.
+  if (created) {
+    return (
+      <div className="card trade">
+        <h2 style={{ margin: 0 }}>
+          {created.name} is yours{fundedTx ? " — and funded." : "."}
+        </h2>
+        <p className="dim" style={{ margin: 0 }}>
+          Owned by <span className="mono">{short(created.owner)}</span> · its wallet:{" "}
+          <span className="mono">{created.address}</span>
+        </p>
 
+        {!fundedTx ? (
+          <>
+            <p className="dim" style={{ margin: 0 }}>
+              Now give it a budget — <strong>from your wallet</strong>. It cannot act on an empty
+              one: its first launch alone costs 1 USDC plus a 0.5 USDC reserve it never spends.
+              {myBalance !== null && (
+                <>
+                  {" "}
+                  You hold <span className="mono">{fmtUsdc(myBalance / 10n ** 12n)} USDC</span>
+                  {myBalance < 3n * 10n ** 18n && (
+                    <>
+                      {" "}
+                      — top up first at{" "}
+                      <a href="https://faucet.circle.com" target="_blank" rel="noreferrer">
+                        the faucet
+                      </a>
+                    </>
+                  )}
+                  .
+                </>
+              )}
+            </p>
+            <div className="trade-row">
+              {[3, 5, 10].map((g) => (
+                <button key={g} className="btn primary" onClick={() => fund(g)} disabled={busy !== null}>
+                  {busy ?? `Send ${g} USDC`}
+                </button>
+              ))}
+            </div>
+            <p className="dim" style={{ margin: 0, fontSize: 12.5 }}>
+              Or fund it later — send USDC to its address from any wallet. It joins the arena the
+              moment it can afford to.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="trade-status ok">
+              Funded — tx{" "}
+              <a
+                className="mono"
+                href={`https://testnet.arcscan.app/tx/${fundedTx}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {short(fundedTx)}
+              </a>
+            </p>
+            <ol className="dim" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.9 }}>
+              <li>
+                First run within ~3 minutes: it launches its token,{" "}
+                <span className="mono">{created.symbol}</span>, with 1 USDC on the curve.
+              </li>
+              <li>Then it trades on its own judgment{mission.trim() ? " — guided by your mission" : ""}.</li>
+              <li>
+                Every decision lands signed on <Link href="/agents">the roster</Link> and{" "}
+                <Link href="/receipts">Receipts</Link>.
+              </li>
+            </ol>
+            <div className="trade-row">
+              <Link className="btn primary" href="/agents">
+                Watch it on the roster
+              </Link>
+              <Link className="btn" href="/receipts">
+                Its receipts
+              </Link>
+            </div>
+          </>
+        )}
+        {error && <p className="trade-status err">{error}</p>}
+      </div>
+    );
+  }
+
+  // Step 1 — connect.
+  if (!account) {
+    return (
+      <div className="card trade">
+        <div className="trade-row">
+          <p className="dim" style={{ margin: 0 }}>
+            Your wallet is your profile here: it signs the agent into existence, owns it on the
+            roster, and funds it with your own USDC. Trading stays agent-only — you deploy, it
+            trades.
+          </p>
+          <button className="btn primary" onClick={connect} disabled={busy !== null}>
+            {busy ?? "Connect wallet"}
+          </button>
+        </div>
+        {error && <p className="trade-status err">{error}</p>}
+      </div>
+    );
+  }
+
+  // Step 2 — describe and sign.
   return (
     <div className="card trade">
+      <div className="trade-row dim mono" style={{ fontSize: 13 }}>
+        <span>owner: {short(account)}</span>
+        {myBalance !== null && <span>{fmtUsdc(myBalance / 10n ** 12n)} USDC in your wallet</span>}
+      </div>
+
       <div className="trade-row">
         <input
           className="trade-input"
@@ -104,7 +243,7 @@ export function CreateAgent() {
           value={name}
           onChange={(e) => setName(e.target.value)}
           maxLength={16}
-          disabled={busy}
+          disabled={busy !== null}
         />
         <span className="dim">
           {symbolPreview.length >= 2 ? (
@@ -123,7 +262,7 @@ export function CreateAgent() {
             key={r.id}
             className={`risk-card ${risk === r.id ? "active" : ""}`}
             onClick={() => setRisk(r.id)}
-            disabled={busy}
+            disabled={busy !== null}
             type="button"
           >
             <div className="risk-title">{r.label}</div>
@@ -140,7 +279,7 @@ export function CreateAgent() {
           value={mission}
           onChange={(e) => setMission(e.target.value)}
           maxLength={280}
-          disabled={busy}
+          disabled={busy !== null}
         />
         <div className="dim" style={{ fontSize: 12.5, marginTop: 4 }}>
           With a mission, your agent <strong>thinks with Claude</strong> on every run and its
@@ -151,28 +290,16 @@ export function CreateAgent() {
       </div>
 
       <div className="trade-row">
-        <span className="dim" style={{ fontSize: 13 }}>Starting budget:</span>
-        {[3, 5, 10].map((g) => (
-          <button
-            key={g}
-            className={`btn tab ${grant === g ? "active" : ""}`}
-            onClick={() => setGrant(g)}
-            disabled={busy}
-            type="button"
-          >
-            {g} USDC
-          </button>
-        ))}
-        <span className="dim" style={{ fontSize: 13 }}>granted from the arena treasury</span>
-      </div>
-
-      <div className="trade-row">
-        <button className="btn primary" onClick={submit} disabled={busy || name.trim().length < 3}>
-          {busy ? "Creating wallet…" : "Create agent"}
+        <button
+          className="btn primary"
+          onClick={create}
+          disabled={busy !== null || name.trim().length < 3}
+        >
+          {busy ?? "Sign & create"}
         </button>
         <span className="dim" style={{ fontSize: 13 }}>
-          Born with its own Circle wallet — no keys, no signup. Budget and limits enforced by the
-          policy engine, same regime as the house agents.
+          One signature (free, no transaction) registers you as its owner. Funding comes next,
+          from your wallet.
         </span>
       </div>
 

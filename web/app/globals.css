@@ -486,6 +486,7 @@ footer {
 .run-state.paused { color: var(--amber); }
 .run-state.awaiting_funding, .run-state.error_recoverable { color: var(--red); }
 .run-state.activating { color: var(--blue); }
+.run-state.grounded { color: var(--faint); }
 
 .metric-strip {
   display: flex;
@@ -575,3 +576,4 @@ footer {
 .fleet-state.paused { color: var(--amber); }
 .fleet-state.awaiting_funding { color: var(--red); }
 .fleet-state.activating { color: var(--blue); }
+.fleet-state.grounded { color: var(--faint); }

@@ -246,6 +246,9 @@ export function RunScreen() {
   const a = data.agent;
   const e = data.economics;
   const state = STATE_LABEL[a.state] ?? a.state.toUpperCase();
+  // "Running" is the server's word for ready-and-unpaused. Without a pilot
+  // nothing actually runs, and the screen should not claim otherwise.
+  const grounded = a.state === "running" && !grant;
 
   return (
     <>
@@ -283,7 +286,9 @@ export function RunScreen() {
               type="button"
             >
               <span className="fleet-handle">@{f.handle}</span>
-              <span className={`fleet-state ${f.state}`}>{STATE_LABEL[f.state] ?? f.state}</span>
+              <span className={`fleet-state ${grant ? f.state : "grounded"}`}>
+                {f.state === "running" && !grant ? "GROUNDED" : (STATE_LABEL[f.state] ?? f.state)}
+              </span>
               <span className="mono dim">{f.cashUsdc ? `${fmtUsdc(f.cashUsdc)} USDC` : "…"}</span>
             </button>
           ))}
@@ -306,7 +311,9 @@ export function RunScreen() {
           </div>
         </div>
         <div className="trade-row">
-          <span className={`run-state ${a.state}`}>● {state}</span>
+          <span className={`run-state ${grounded ? "grounded" : a.state}`}>
+            ● {grounded ? "GROUNDED — PILOT OFF" : state}
+          </span>
           {a.state === "running" && (
             <button className="btn" onClick={() => control("pause")} disabled={busy !== null}>
               Pause

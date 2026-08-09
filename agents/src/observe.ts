@@ -46,6 +46,16 @@ const clients = URLS.map((u) =>
 );
 let cursor = 0;
 
+/**
+ * Rate limits on these endpoints are per caller, not per endpoint: when the
+ * host is hot, every URL in the pool refuses at once, and rotating through
+ * them at full speed just burns the budget faster. So a failed pass waits
+ * before the next one — measured in production, where a burst of eleven
+ * eth_calls was enough to have all four endpoints answering "rate limit
+ * exceeded" and every agent run erroring.
+ */
+const RETRY_PAUSE_MS = 600;
+
 async function rotate<T>(call: (c: (typeof clients)[number]) => Promise<T>): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < clients.length * 2; attempt++) {
@@ -56,6 +66,10 @@ async function rotate<T>(call: (c: (typeof clients)[number]) => Promise<T>): Pro
       return result;
     } catch (err) {
       lastErr = err;
+      // A full pass over the pool means the limit is ours, not one endpoint's.
+      if (attempt > 0 && (attempt + 1) % clients.length === 0) {
+        await new Promise((r) => setTimeout(r, RETRY_PAUSE_MS));
+      }
     }
   }
   throw lastErr;
@@ -86,26 +100,28 @@ export interface TradeView {
   blockNumber: bigint;
 }
 
-/** Token symbols never change, so one read per token lasts the process. */
-const symbolCache = new Map<string, string>();
-
 /**
- * The market list changes only when someone launches, and every agent in this
- * process asks for it on every run. Without a cache that is a dozen chain reads
- * per agent per run, which is how the public endpoints start refusing us.
+ * What a market is, as opposed to how it is doing. Id, token, creator and
+ * symbol are fixed at launch and can never change, so they are read once and
+ * kept; only the reserve moves, and it is refreshed on its own schedule.
+ *
+ * This matters because the host, not the endpoint, is what gets rate limited:
+ * rebuilding the whole list from the chain on every run put twenty-odd
+ * eth_calls into a budget that allows a couple, and every agent run failed.
  */
-const MARKETS_TTL_MS = 20_000;
-let marketsCache: { at: number; markets: MarketView[] } | null = null;
-
-async function symbolOf(token: `0x${string}`): Promise<string> {
-  const hit = symbolCache.get(token.toLowerCase());
-  if (hit) return hit;
-  const symbol = await pub
-    .readContract({ address: token, abi: chainAbi, functionName: "symbol" })
-    .catch(() => "");
-  if (symbol) symbolCache.set(token.toLowerCase(), symbol as string);
-  return (symbol as string) ?? "";
+interface MarketFacts {
+  id: bigint;
+  token: `0x${string}`;
+  creator: `0x${string}`;
+  symbol: string;
 }
+
+const known = new Map<string, MarketFacts>();
+const reserves = new Map<string, bigint>();
+
+/** How long a market list may be reused before the chain is asked again. */
+const MARKETS_TTL_MS = 30_000;
+let checkedAt = 0;
 
 /**
  * Every market, read from the chain.
@@ -118,35 +134,45 @@ async function symbolOf(token: `0x${string}`): Promise<string> {
  * nothing to trade.
  */
 export async function fetchMarkets(): Promise<MarketView[]> {
-  if (marketsCache && Date.now() - marketsCache.at < MARKETS_TTL_MS) return marketsCache.markets;
+  const stale = Date.now() - checkedAt >= MARKETS_TTL_MS;
 
-  const count = (await pub.readContract({
-    address: MARKETS as `0x${string}`,
-    abi: chainAbi,
-    functionName: "marketCount",
-  })) as bigint;
-
-  const markets: MarketView[] = [];
-  for (let id = 0n; id < count; id++) {
-    const [token, creator, reserveUsdc] = (await pub.readContract({
+  if (stale || known.size === 0) {
+    const count = (await pub.readContract({
       address: MARKETS as `0x${string}`,
       abi: chainAbi,
-      functionName: "markets",
-      args: [id],
-    })) as [`0x${string}`, `0x${string}`, bigint, bigint, bigint, bigint];
-    markets.push({
-      id,
-      creator,
-      symbol: await symbolOf(token),
-      reserveUsdc,
-      // Lifetime totals are a history question and the chain does not keep a
-      // counter; null says "unknown" so scoring falls back to the flow window
-      // instead of reading it as "never traded".
-      tradeCount: null,
-    });
+      functionName: "marketCount",
+    })) as bigint;
+
+    // Only ids we have never seen cost anything: markets are append-only, so a
+    // steady state is one eth_call per window no matter how many exist.
+    for (let id = 0n; id < count; id++) {
+      const key = id.toString();
+      if (known.has(key)) continue;
+      const [token, creator, reserveUsdc] = (await pub.readContract({
+        address: MARKETS as `0x${string}`,
+        abi: chainAbi,
+        functionName: "markets",
+        args: [id],
+      })) as [`0x${string}`, `0x${string}`, bigint, bigint, bigint, bigint];
+      const symbol = (await pub
+        .readContract({ address: token, abi: chainAbi, functionName: "symbol" })
+        .catch(() => "")) as string;
+      known.set(key, { id, token, creator, symbol });
+      reserves.set(key, reserveUsdc);
+    }
+    checkedAt = Date.now();
   }
-  marketsCache = { at: Date.now(), markets };
-  return markets;
+
+  return [...known.values()].map((m) => ({
+    id: m.id,
+    creator: m.creator,
+    symbol: m.symbol,
+    reserveUsdc: reserves.get(m.id.toString()) ?? 0n,
+    // Lifetime totals are a history question and the chain does not keep a
+    // counter; null says "unknown" so scoring falls back to the flow window
+    // instead of reading it as "never traded".
+    tradeCount: null,
+  }));
 }
 
 /**
@@ -162,7 +188,13 @@ const FLOW_WINDOW_BLOCKS = 9_999n;
  * Arc endpoint accepts — so an agent's sense of who is trading is never older
  * than the last block.
  */
+let flowCache: { at: number; trades: TradeView[] } | null = null;
+
 export async function fetchRecentTrades(): Promise<TradeView[]> {
+  // Every agent in this process asks on every run, and the window moves by
+  // seconds — one read serves them all.
+  if (flowCache && Date.now() - flowCache.at < MARKETS_TTL_MS) return flowCache.trades;
+
   const head = await currentBlock();
   const fromBlock = head > FLOW_WINDOW_BLOCKS ? head - FLOW_WINDOW_BLOCKS : 0n;
   const logs = (await pub.getLogs({
@@ -175,13 +207,15 @@ export async function fetchRecentTrades(): Promise<TradeView[]> {
     blockNumber: bigint;
   }>;
 
-  return logs
+  const trades = logs
     .filter((l) => l.args.id !== undefined)
     .map((l) => ({
       marketId: l.args.id as bigint,
       trader: (l.args.buyer ?? l.args.seller) as `0x${string}`,
       blockNumber: l.blockNumber,
     }));
+  flowCache = { at: Date.now(), trades };
+  return trades;
 }
 
 /**
@@ -194,23 +228,13 @@ export async function fetchRecentTrades(): Promise<TradeView[]> {
  * against a cap of two.
  */
 export async function ownMarketCountOnChain(address: `0x${string}`): Promise<number> {
-  const count = await pub.readContract({
-    address: MARKETS as `0x${string}`,
-    abi: chainAbi,
-    functionName: "marketCount",
-  });
-
-  let mine = 0;
-  for (let i = 0n; i < count; i++) {
-    const [, creator] = await pub.readContract({
-      address: MARKETS as `0x${string}`,
-      abi: chainAbi,
-      functionName: "markets",
-      args: [i],
-    });
-    if (creator.toLowerCase() === address.toLowerCase()) mine++;
-  }
-  return mine;
+  // A creator is fixed at launch, so the market registry above already holds
+  // the answer — and it is the chain's answer, refreshed against marketCount,
+  // not the indexer's. Walking every market with its own eth_call is what put
+  // this read over the host's rate limit in the first place.
+  const markets = await fetchMarkets();
+  const me = address.toLowerCase();
+  return markets.filter((m) => m.creator.toLowerCase() === me).length;
 }
 
 /** Creator fees this address can claim, per market, read from the chain. */

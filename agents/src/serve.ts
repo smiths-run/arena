@@ -373,6 +373,51 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, { runs: rows });
   }
 
+  /**
+   * The markets, straight from the chain.
+   *
+   * The indexer is the history surface and it can fall behind; a market that
+   * exists is not a matter of opinion. The site's front page asks here so it
+   * shows what the chain shows — the same reads the agents use, sharing their
+   * cache, so this costs nothing extra.
+   */
+  if (url.pathname === "/markets") {
+    const [markets, flow] = await Promise.all([obs.fetchMarkets(), obs.fetchRecentTrades()]);
+    const recentOf = new Map<string, number>();
+    for (const t of flow) {
+      const key = t.marketId.toString();
+      recentOf.set(key, (recentOf.get(key) ?? 0) + 1);
+    }
+    return json(res, {
+      markets: markets.map((m) => ({
+        id: m.id.toString(),
+        symbol: m.symbol,
+        creator: m.creator,
+        reserveUsdc: m.reserveUsdc.toString(),
+        recentTrades: recentOf.get(m.id.toString()) ?? 0,
+      })),
+      // Newest first, the way a reader scans it.
+      recentTrades: [...flow]
+        .sort((a, b) =>
+          a.blockNumber === b.blockNumber
+            ? b.logIndex - a.logIndex
+            : Number(b.blockNumber - a.blockNumber),
+        )
+        .slice(0, 20)
+        .map((t) => ({
+          marketId: t.marketId.toString(),
+          symbol: markets.find((m) => m.id === t.marketId)?.symbol ?? "",
+          trader: t.trader,
+          side: t.side,
+          usdc: t.usdc.toString(),
+          impactBps: t.impactBps.toString(),
+          txHash: t.txHash,
+          logIndex: t.logIndex,
+          blockNumber: t.blockNumber.toString(),
+        })),
+    });
+  }
+
   if (url.pathname === "/agents") {
     const rows = await Promise.all(fullRoster().map(async (a) => {
       const outcomes = store.db

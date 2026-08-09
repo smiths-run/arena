@@ -5,11 +5,23 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 export const dynamic = "force-dynamic";
 
 export default async function Arena() {
-  const [stats, { markets }, { activity }] = await Promise.all([
-    api.stats(),
-    api.markets(),
-    api.activity(14),
+  // The chain says what exists; the indexer adds history to it where it has
+  // caught up. Neither failing should blank the page.
+  const [chain, indexed] = await Promise.all([
+    api.chain().catch(() => ({ markets: [], recentTrades: [] })),
+    api.markets().catch(() => ({ markets: [] })),
   ]);
+
+  const historyOf = new Map(indexed.markets.map((m) => [m.id, m]));
+  const markets = chain.markets.map((m) => ({
+    ...m,
+    name: historyOf.get(m.id)?.name ?? "",
+    volumeUsdc: historyOf.get(m.id)?.volumeUsdc ?? null,
+    tradeCount: historyOf.get(m.id)?.tradeCount ?? null,
+  }));
+
+  const curveTotal = chain.markets.reduce((sum, m) => sum + BigInt(m.reserveUsdc), 0n);
+  const activity = chain.recentTrades;
 
   return (
     <main>
@@ -26,20 +38,20 @@ export default async function Arena() {
 
       <div className="counters">
         <div className="counter">
-          <div className="value">{stats.marketCount}</div>
+          <div className="value">{markets.length}</div>
           <div className="label">markets</div>
         </div>
         <div className="counter">
-          <div className="value">{stats.tradeCount}</div>
-          <div className="label">trades</div>
+          <div className="value">{activity.length}</div>
+          <div className="label">recent trades</div>
         </div>
         <div className="counter">
-          <div className="value">{usdc(stats.volumeUsdc)}</div>
-          <div className="label">USDC volume</div>
+          <div className="value">{usdc(curveTotal)}</div>
+          <div className="label">USDC in curves</div>
         </div>
         <div className="counter">
-          <div className="value">{usdc(stats.creatorFeesClaimed)}</div>
-          <div className="label">creator fees claimed</div>
+          <div className="value">{markets.filter((m) => m.recentTrades > 0).length}</div>
+          <div className="label">markets with flow</div>
         </div>
       </div>
 
@@ -54,7 +66,7 @@ export default async function Arena() {
                   <th>Creator</th>
                   <th style={{ textAlign: "right" }}>Curve USDC</th>
                   <th style={{ textAlign: "right" }}>Volume</th>
-                  <th style={{ textAlign: "right" }}>Trades</th>
+                  <th style={{ textAlign: "right" }}>Recent</th>
                 </tr>
               </thead>
               <tbody>
@@ -69,11 +81,11 @@ export default async function Arena() {
                     <td className="mono" style={{ textAlign: "right" }}>
                       {usdc(m.reserveUsdc)}
                     </td>
-                    <td className="mono" style={{ textAlign: "right" }}>
-                      {usdc(m.volumeUsdc)}
+                    <td className="mono dim" style={{ textAlign: "right" }}>
+                      {m.volumeUsdc === null ? "—" : usdc(m.volumeUsdc)}
                     </td>
                     <td className="mono" style={{ textAlign: "right" }}>
-                      {m.tradeCount}
+                      {m.recentTrades}
                     </td>
                   </tr>
                 ))}
@@ -105,7 +117,7 @@ export default async function Arena() {
                         rel="noreferrer"
                       >
                         <span className={`badge ${t.side}`}>{t.side}</span>{" "}
-                        <span className="dim">market {t.marketId}</span>
+                        <span className="dim">{t.symbol || `market ${t.marketId}`}</span>
                       </a>
                     </td>
                     <td className="mono" style={{ textAlign: "right" }}>

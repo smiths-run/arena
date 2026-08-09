@@ -171,7 +171,34 @@ export interface MyAgent {
   positions: number;
 }
 
+/**
+ * The chain's own answer about what exists, served by the agent service from
+ * the same cached reads its agents use. The indexer is history and can fall
+ * behind; whether a market exists is not a matter of opinion, so the front
+ * page asks here and treats the indexer as enrichment.
+ */
+export interface ChainMarket {
+  id: string;
+  symbol: string;
+  creator: string;
+  reserveUsdc: string;
+  recentTrades: number;
+}
+
+export interface ChainTrade {
+  marketId: string;
+  symbol: string;
+  trader: string;
+  side: "buy" | "sell";
+  usdc: string;
+  impactBps: string;
+  txHash: string;
+  logIndex: number;
+  blockNumber: string;
+}
+
 export const api = {
+  chain: () => get<{ markets: ChainMarket[]; recentTrades: ChainTrade[] }>(`${RECEIPTS}/markets`),
   stats: () => get<Stats>(`${INDEXER}/api/stats`),
   markets: () => get<{ markets: Market[] }>(`${INDEXER}/api/markets`),
   market: (id: string) => get<Market>(`${INDEXER}/api/markets/${id}`),

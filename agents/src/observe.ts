@@ -98,6 +98,12 @@ export interface TradeView {
   marketId: bigint;
   trader: `0x${string}`;
   blockNumber: bigint;
+  /** What the trade was. Strategy only counts flow; the site shows the trade. */
+  side: "buy" | "sell";
+  usdc: bigint;
+  impactBps: bigint;
+  txHash: `0x${string}`;
+  logIndex: number;
 }
 
 /**
@@ -203,8 +209,18 @@ export async function fetchRecentTrades(): Promise<TradeView[]> {
     fromBlock,
     toBlock: head,
   })) as Array<{
-    args: { id?: bigint; buyer?: `0x${string}`; seller?: `0x${string}` };
+    eventName: "Bought" | "Sold";
+    args: {
+      id?: bigint;
+      buyer?: `0x${string}`;
+      seller?: `0x${string}`;
+      usdcIn?: bigint;
+      usdcOut?: bigint;
+      impactBps?: bigint;
+    };
     blockNumber: bigint;
+    transactionHash: `0x${string}`;
+    logIndex: number;
   }>;
 
   const trades = logs
@@ -213,6 +229,11 @@ export async function fetchRecentTrades(): Promise<TradeView[]> {
       marketId: l.args.id as bigint,
       trader: (l.args.buyer ?? l.args.seller) as `0x${string}`,
       blockNumber: l.blockNumber,
+      side: (l.eventName === "Bought" ? "buy" : "sell") as "buy" | "sell",
+      usdc: (l.args.usdcIn ?? l.args.usdcOut ?? 0n) as bigint,
+      impactBps: (l.args.impactBps ?? 0n) as bigint,
+      txHash: l.transactionHash,
+      logIndex: l.logIndex,
     }));
   flowCache = { at: Date.now(), trades };
   return trades;

@@ -367,7 +367,8 @@ export function RunScreen() {
       )}
       {a.state === "activating" && (
         <p className="dim" style={{ marginTop: 8 }}>
-          Registering @{a.handle} on Arc and securing its handle…
+          @{a.handle} is funded — registering it on Arc and securing its handle. This takes a
+          minute or two, and needs no further action from you.
         </p>
       )}
 

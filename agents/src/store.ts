@@ -705,10 +705,24 @@ export function userAgentSetMandate(name: string, mandate: string | null): void 
 }
 
 /** Agents the activation sweep should look at: not yet active, or active but missing identity. */
+/**
+ * Agents that have not finished activating: still waiting on capital, mid-way
+ * through it, or somehow without an identity.
+ *
+ * "Not active" was the old test, and it swept up states that have nothing to do
+ * with activation — a paused agent is fully activated and stays paused, but it
+ * matched, sat at the head of the queue by age, and the sweep spent its one
+ * attempt a minute on it while newly funded agents waited behind. An agent
+ * parked in error_recoverable is deliberately parked and is not retried here.
+ */
 export function userAgentsNeedingActivation(): UserAgentRow[] {
   return db
     .prepare(
-      "SELECT * FROM user_agents WHERE active = 1 AND (state != 'active' OR agent_id IS NULL) ORDER BY created_at",
+      `SELECT * FROM user_agents
+       WHERE active = 1
+         AND (agent_id IS NULL OR state IN ('awaiting_funding', 'activating'))
+         AND state != 'error_recoverable'
+       ORDER BY created_at`,
     )
     .all() as unknown as UserAgentRow[];
 }

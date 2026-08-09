@@ -30,8 +30,23 @@ const ticking = new Set<string>();
 
 const HANDLE_RE = /^[a-z][a-z0-9-]{2,15}$/;
 
-/** Map internal facts to the public product state. */
-function publicState(row: { state: string; name: string }): string {
+/** The activation bar, mirrored from the orchestrator so the two agree. */
+const ACTIVATION_MINIMUM = 2_000_000n;
+
+/**
+ * What to call an agent's state out loud.
+ *
+ * Funding and activation are separate moments: the money arrives instantly,
+ * the sweep that registers the identity and claims the handle runs on its own
+ * cadence. In between, an agent holding five USDC was being told it was
+ * "waiting for capital, it needs at least 2" — true of the stored state,
+ * plainly false to the person who had just paid. Given the balance, say what
+ * is actually happening.
+ */
+function publicState(row: { state: string; name: string }, cash?: string | bigint | null): string {
+  if (row.state === "awaiting_funding" && cash != null && BigInt(cash) >= ACTIVATION_MINIMUM) {
+    return "activating";
+  }
   if (row.state !== "active") return row.state;
   return store.isPaused(row.name) ? "paused" : "running";
 }
@@ -132,16 +147,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!owner) return json(res, { agents: [] });
     const net = store.netResultByAgent();
     const rows = await Promise.all(
-      store.userAgentsListByOwner(owner).map(async (r) => ({
-        handle: r.name,
-        state: publicState(r),
-        approach: r.approach,
-        agentId: r.agent_id,
-        wallet: r.address,
-        cashUsdc: await balanceOf(r.address),
-        netResult: net.find((n) => n.agent === r.name)?.net ?? "0",
-        positions: store.positionsOf(r.name).filter((p) => p.tokens > 0n).length,
-      })),
+      store.userAgentsListByOwner(owner).map(async (r) => {
+        const cashUsdc = await balanceOf(r.address);
+        return {
+          handle: r.name,
+          state: publicState(r, cashUsdc),
+          approach: r.approach,
+          agentId: r.agent_id,
+          wallet: r.address,
+          cashUsdc,
+          netResult: net.find((n) => n.agent === r.name)?.net ?? "0",
+          positions: store.positionsOf(r.name).filter((p) => p.tokens > 0n).length,
+        };
+      }),
     );
     return json(res, { agents: rows });
   }
@@ -154,7 +172,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, {
       exists: true,
       handle: row.name,
-      state: publicState(row),
+      state: publicState(row, await balanceOf(row.address)),
       wallet: row.address,
       agentId: row.agent_id,
       cashUsdc: (await balanceOf(row.address)) ?? "0",
@@ -222,6 +240,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           ? "high"
           : "balanced";
 
+    const cash = equity?.walletUsdc?.toString() ?? (await balanceOf(row.address));
+
     return json(res, {
       exists: true,
       agent: {
@@ -231,13 +251,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         approach: entry.approach,
         risk,
         mandate: entry.mandate,
-        state: publicState(row),
+        state: publicState(row, cash),
         identityTx: row.identity_tx,
         handleTx: row.handle_tx,
       },
       economics: {
         equity: equity?.total?.toString() ?? null,
-        cash: equity?.walletUsdc?.toString() ?? (await balanceOf(row.address)),
+        cash,
         netResult: store.netResultByAgent().find((n) => n.agent === row.name)?.net ?? "0",
         positionCount: positions.length,
         claimableFees: equity?.claimableCreatorFees?.toString() ?? null,

@@ -159,7 +159,14 @@ export const heuristicStrategist: Strategist = async (input) => {
      * evidence: the moment any flow exists the gate above applies again, and
      * every hard limit and the policy engine are untouched.
      */
-    if (stats.size === 0) {
+    // Only once. Our own trades are excluded from the flow stats — rightly, a
+    // wallet trading with itself is not evidence — but that means the cold
+    // start would find the window just as empty on the next run and buy again,
+    // and again, until the daily cap stopped it. An agent already holding
+    // something has skin in the game and waits for evidence like everyone else.
+    const alreadyIn = store.positionsOf(agentName).some((p) => p.tokens > 0n);
+
+    if (stats.size === 0 && !alreadyIn) {
       const candidates = markets
         .filter((m) => !strategy.blockedMarkets.includes(m.id))
         .filter((m) => m.creator.toLowerCase() !== me);

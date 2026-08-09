@@ -10,9 +10,18 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { heuristicStrategist, type StrategistInput } from "./strategist.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { STRATEGIES, type Strategy } from "./config.ts";
 import type { MarketView, TradeView } from "./observe.ts";
+import type { StrategistInput } from "./strategist.ts";
+
+// The cold start asks the ledger whether this agent already holds anything, so
+// the ledger must be a fresh one — pointed at a throwaway directory before the
+// store is imported, or these tests would read whatever the live agents did.
+process.env.AGENTS_DATA_DIR = mkdtempSync(join(tmpdir(), "smiths-coldstart-"));
+const { heuristicStrategist } = await import("./strategist.ts");
 
 const ME: `0x${string}` = "0x1111111111111111111111111111111111111111";
 const OTHER: `0x${string}` = "0x2222222222222222222222222222222222222222";
@@ -103,6 +112,21 @@ test("flow that is only our own does not count as flow", async () => {
   assert.equal(action.kind, "buy");
   if (action.kind !== "buy") return;
   assert.ok(action.usdcIn <= 500_000n, "an all-self window should still open at cold-start size");
+});
+
+test("the cold start fires once, not every run", async () => {
+  // An agent's own trades are excluded from the flow stats, so after opening
+  // it would find the window just as empty and buy again — and again — until
+  // the daily cap stopped it. Holding something is the signal to stop.
+  const store = await import("./store.ts");
+  const first = await heuristicStrategist(input({ agentName: "opener" }));
+  assert.equal(first.kind, "buy");
+  if (first.kind !== "buy") return;
+
+  store.positionAdd("opener", first.marketId, 1_000_000n, first.usdcIn);
+
+  const second = await heuristicStrategist(input({ agentName: "opener" }));
+  assert.equal(second.kind, "skip", `expected a skip, got ${second.kind}`);
 });
 
 test("a blocked market is never the opening", async () => {

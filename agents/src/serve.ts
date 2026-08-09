@@ -14,8 +14,18 @@ import { createUserAgent } from "./agent-factory.ts";
 import { handleAvailable } from "./identity.ts";
 import { RESERVED_NAMES } from "./visitor-strategy.ts";
 import { equityOf } from "./equity.ts";
+import { runOnce } from "./runtime.ts";
+import { decide } from "./schedule.ts";
+import { heuristicStrategist } from "./strategist.ts";
+import { llmStrategist } from "./llm-strategist.ts";
+import { circle } from "./shared.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
+
+// The pilot lane: one Circle client for tick-driven runs, one in-flight guard
+// per agent so two tabs can never fly the same agent into itself.
+let pilotClient: ReturnType<typeof circle> | null = null;
+const ticking = new Set<string>();
 
 const HANDLE_RE = /^[a-z][a-z0-9-]{2,15}$/;
 
@@ -226,6 +236,78 @@ const server = createServer(async (req, res) => {
       },
       positions,
       recentDecisions: decisions,
+    });
+  }
+
+  // The pilot tick: a browser tab flying one of its operator's agents.
+  //
+  // The platform does not schedule visitor agents — their runs happen only
+  // while an operator's tab is open and ticking. Authorization is one wallet
+  // signature over an expiring pilot grant, made once and reused silently;
+  // custody never moves (Circle signs server-side, policy still disposes).
+  if (req.method === "POST" && url.pathname === "/agent/tick") {
+    const body = await readJson(req);
+    const owner = typeof body.owner === "string" ? body.owner.toLowerCase() : "";
+    const wanted = typeof body.handle === "string" ? body.handle.toLowerCase() : "";
+    const expiry = Number(body.expiry ?? 0);
+    const mine = owner ? store.userAgentsListByOwner(owner) : [];
+    const row = mine.find((r) => r.name === wanted);
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+
+    if (!Number.isFinite(expiry) || expiry < Date.now() || expiry > Date.now() + 8 * 24 * 3600 * 1000) {
+      return json(res, { error: "pilot grant expired — sign again" }, 403);
+    }
+    const ok = await verifyMessage({
+      address: body.owner as `0x${string}`,
+      message: `Smiths Run: pilot ${owner} until ${expiry}`,
+      signature: body.signature as `0x${string}`,
+    }).catch(() => false);
+    if (!ok) return json(res, { error: "pilot signature does not verify" }, 403);
+
+    if (row.state !== "active") return json(res, { ran: false, reason: row.state });
+    if (ticking.has(row.name)) return json(res, { ran: false, reason: "busy" });
+
+    const entry = resolve(row.name);
+    if (!entry) return json(res, { ran: false, reason: "unknown agent" });
+    const cooldownMs = entry.strategy.cooldownSeconds * 1000;
+    const sinceMs = Date.now() - store.lastRunAt(row.name);
+    const verdict = decide({
+      held: store.unresolvedPending().some((p) => p.agent === row.name),
+      requested: false,
+      paused: store.isPaused(row.name),
+      once: false,
+      sinceLastRunMs: sinceMs,
+      cooldownMs,
+    });
+    if (!verdict.run) {
+      return json(res, {
+        ran: false,
+        reason: verdict.why,
+        nextInSeconds: Math.max(0, Math.ceil((cooldownMs - sinceMs) / 1000)),
+      });
+    }
+
+    ticking.add(row.name);
+    try {
+      pilotClient ??= circle();
+      const strategist =
+        entry.strategy.llm.enabled && process.env.ANTHROPIC_API_KEY ? llmStrategist : heuristicStrategist;
+      await runOnce(row.name, "pilot", pilotClient, strategist);
+    } catch (err) {
+      // runOnce records its own failures as runs; anything that still escapes
+      // must not take the server down with it.
+      const msg = err instanceof Error ? err.message : String(err);
+      return json(res, { ran: false, reason: "error", error: msg.slice(0, 200) }, 500);
+    } finally {
+      ticking.delete(row.name);
+    }
+    const last = store.db
+      .prepare("SELECT id, outcome, action_kind, reason FROM runs WHERE agent = ? ORDER BY id DESC LIMIT 1")
+      .get(row.name) as { id: number; outcome: string; action_kind: string | null; reason: string | null };
+    return json(res, {
+      ran: true,
+      run: { ...last, reason: (last.reason ?? "").split("\n")[0].slice(0, 160) },
+      nextInSeconds: entry.strategy.cooldownSeconds,
     });
   }
 

@@ -8,10 +8,11 @@
  * The operator can pause, resume and add capital. They cannot trade — the
  * agent does that part.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Address } from "viem";
 import { connectWallet, sendUsdc, signMessage } from "@/lib/wallet";
+import { createGrant, dropGrant, loadGrant, tick, type PilotGrant } from "@/lib/pilot";
 import { short, signedUsdc, usdc as fmtUsdc, EXPLORER, type MyAgent, type RunOverview } from "@/lib/api";
 
 const APPROACH_LABEL: Record<string, string> = {
@@ -51,6 +52,14 @@ export function RunScreen() {
   const [fundAmount, setFundAmount] = useState("5");
   const [showFund, setShowFund] = useState(false);
 
+  // The pilot: this tab is the runtime. While it holds a valid grant it ticks
+  // every running agent on its cooldown; close the tab and the fleet lands.
+  const [grant, setGrant] = useState<PilotGrant | null>(null);
+  const [pilotNote, setPilotNote] = useState<string | null>(null);
+  const nextTickAt = useRef<Record<string, number>>({});
+  const fleetRef = useRef<MyAgent[] | null>(null);
+  fleetRef.current = fleet;
+
   const refresh = useCallback(
     async (owner: Address, handle: string | null) => {
       try {
@@ -80,6 +89,62 @@ export function RunScreen() {
     const t = setInterval(() => refresh(account, selected), 5000);
     return () => clearInterval(t);
   }, [account, selected, refresh]);
+
+  // Recover a stored pilot grant the moment the wallet connects.
+  useEffect(() => {
+    if (account) setGrant(loadGrant(account));
+  }, [account]);
+
+  // The tick loop. The server is the authority on cooldowns — a tick that
+  // lands early just comes back with "cooldown" and when to try again, so
+  // two tabs or a clock drift can never double-run an agent.
+  useEffect(() => {
+    if (!account || !grant) return;
+    let stopped = false;
+    const fly = async () => {
+      if (stopped) return;
+      const running = (fleetRef.current ?? []).filter((f) => f.state === "running");
+      for (const f of running) {
+        if ((nextTickAt.current[f.handle] ?? 0) > Date.now()) continue;
+        try {
+          const r = await tick(account, f.handle, grant);
+          if (r.nextInSeconds) {
+            nextTickAt.current[f.handle] = Date.now() + r.nextInSeconds * 1000;
+          } else {
+            nextTickAt.current[f.handle] = Date.now() + 20_000;
+          }
+          if (r.ran) refresh(account, selected);
+        } catch {
+          // A rejected grant means it lapsed — land the fleet and ask for a
+          // fresh signature instead of hammering the server.
+          dropGrant(account);
+          setGrant(null);
+          setPilotNote("Pilot grant expired — sign again to keep your agents flying.");
+          return;
+        }
+      }
+    };
+    fly();
+    const t = setInterval(fly, 10_000);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+    };
+  }, [account, grant, refresh, selected]);
+
+  const startPilot = async () => {
+    if (!account) return;
+    setError(null);
+    setPilotNote(null);
+    setBusy("waiting for your signature…");
+    try {
+      setGrant(await createGrant(account));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const connect = async () => {
     setError(null);
@@ -184,6 +249,30 @@ export function RunScreen() {
 
   return (
     <>
+      <div className={`pilot-bar ${grant ? "live" : ""}`}>
+        <span className={`pilot-dot ${grant ? "" : "idle"}`} />
+        {grant ? (
+          <div className="pilot-text">
+            <div className="pilot-title">Pilot live</div>
+            <div className="pilot-sub">
+              Your agents run while this tab stays open — close it and they land.
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="pilot-text">
+              <div className="pilot-title">Fleet on the ground</div>
+              <div className="pilot-sub">
+                {pilotNote ??
+                  "Smiths doesn't host your agents — this tab is their runtime. Start the pilot to let them fly."}
+              </div>
+            </div>
+            <button className="btn primary" onClick={startPilot} disabled={busy !== null}>
+              {busy ?? "Start pilot"}
+            </button>
+          </>
+        )}
+      </div>
       {fleet && (
         <div className="fleet-strip">
           {fleet.map((f) => (
@@ -295,7 +384,11 @@ export function RunScreen() {
           <h2>Recent decisions</h2>
           <div className="decision-list">
             {(data.recentDecisions ?? []).length === 0 && (
-              <p className="dim">Nothing yet — the first run lands within about three minutes.</p>
+              <p className="dim">
+                {grant
+                  ? "Nothing yet — the first run lands within moments."
+                  : "Nothing yet — start the pilot above and the first run lands in seconds."}
+              </p>
             )}
             {(data.recentDecisions ?? []).map((d) => (
               <div key={d.id} className="decision-row">

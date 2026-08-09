@@ -90,8 +90,8 @@ async function activateOneVisitor(): Promise<void> {
     store.userAgentSetHandleTx(next.name, claim.txHash);
 
     store.userAgentSetState(next.name, "active");
-    // Create = the agent begins: the first run does not wait out a cooldown.
-    store.requestRun(next.name);
+    // No first run here: visitor agents fly only under an operator's open tab.
+    // The pilot's first tick lands immediately — a fresh agent has no cooldown.
     console.log(`activated @${next.name} — identity ${agentId}, handle claimed`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -111,7 +111,12 @@ async function pass(): Promise<void> {
   // Re-read the roster every pass: an agent activated a second ago is part
   // of the economy on the next tick, no restart required. Only ACTIVE agents
   // run — an agent without its identity and handle does not act.
+  //
+  // Visitor agents are not scheduled here at all: the platform does not host
+  // them. They run only while their operator's browser tab is open, one tick
+  // at a time through POST /agent/tick. The house three are ours to host.
   for (const agent of fullRoster()) {
+    if (agent.kind === "visitor") continue;
     if (agent.state !== "active") continue;
     const isHeld = held.has(agent.name);
     const verdict = decide({

@@ -169,9 +169,10 @@ export function CreateAgent() {
         {!funded ? (
           <>
             <p className="dim" style={{ margin: 0 }}>
-              Give it its starting capital — from your wallet. It activates itself the moment it
-              holds at least 2 USDC: registers on Arc, secures @{created.handle}, then launches{" "}
-              <span className="mono">{created.symbol}</span> and starts working.
+              Give it its starting capital — from your wallet. The moment it holds at least 2
+              USDC it registers on Arc and secures @{created.handle}. From then on it flies from
+              your Run tab — launching <span className="mono">{created.symbol}</span> on its
+              first run — for as long as the tab stays open.
             </p>
             <div className="trade-row">
               <input

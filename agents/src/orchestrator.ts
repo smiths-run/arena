@@ -149,7 +149,14 @@ if (once) {
   console.log(`orchestrating ${fullRoster().length} agents; ctrl-c to stop`);
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    await pass();
+    // A pass that throws is a bad minute, not a dead economy. Without this the
+    // rejection ends the process, and because the three agent processes share
+    // a container, every one of them restarts with it.
+    try {
+      await pass();
+    } catch (err) {
+      console.error(`pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
     await new Promise((r) => setTimeout(r, 10_000));
   }
 }

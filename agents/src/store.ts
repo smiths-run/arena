@@ -17,8 +17,28 @@ mkdirSync(DIR, { recursive: true });
 
 export const db = new DatabaseSync(`${DIR}/agents.db`);
 
+/**
+ * Three processes share this file and all three open it at once on startup,
+ * so they race to create the same tables. Without a busy timeout the loser of
+ * that race gets SQLITE_BUSY immediately, dies, and takes the container with
+ * it — a crash on boot that looks exactly like a broken deploy. Waiting a few
+ * seconds for a lock that is held for milliseconds costs nothing.
+ */
+db.exec("PRAGMA busy_timeout = 10000;");
+
+/**
+ * Switching the journal mode takes an exclusive lock that a busy timeout does
+ * not wait out, and on a fresh database all three processes attempt it at once.
+ * Whoever gets there first sets WAL for everyone, so losing this particular
+ * race is success, not failure.
+ */
+try {
+  db.exec("PRAGMA journal_mode = WAL;");
+} catch {
+  /* another process is setting it right now */
+}
+
 db.exec(`
-  PRAGMA journal_mode = WAL;
 
   CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +82,20 @@ db.exec(`
 `);
 
 // Additive migrations: columns that arrived after the first release.
+/**
+ * Add a column, tolerating the case where another process just added it.
+ * Every migration here is "check, then alter", and three processes run it at
+ * once on startup — so two can both see a column missing and both try to add
+ * it. Losing that race is not an error; the schema ends up as intended.
+ */
+function addColumn(table: string, column: string, type: string): void {
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  } catch (err) {
+    if (!String(err).includes("duplicate column name")) throw err;
+  }
+}
+
 const runCols = new Set(
   (db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((c) => c.name),
 );
@@ -79,7 +113,7 @@ for (const [col, type] of [
   ["receipt_hash", "TEXT"],
   ["receipt_signature", "TEXT"],
 ] as const) {
-  if (!runCols.has(col)) db.exec(`ALTER TABLE runs ADD COLUMN ${col} ${type}`);
+  if (!runCols.has(col)) addColumn("runs", col, type);
 }
 
 const pendingCols = new Set(
@@ -95,7 +129,7 @@ for (const [col, type] of [
   ["agent_name", "TEXT"],
   ["run_id", "INTEGER"],
 ] as const) {
-  if (!pendingCols.has(col)) db.exec(`ALTER TABLE pending_tx ADD COLUMN ${col} ${type}`);
+  if (!pendingCols.has(col)) addColumn("pending_tx", col, type);
 }
 
 if (!pendingCols.has("applied")) {
@@ -176,34 +210,34 @@ db.exec(`
     ),
   );
   if (!cols.has("granted")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN granted INTEGER NOT NULL DEFAULT 0");
+    addColumn("user_agents", "granted", "INTEGER NOT NULL DEFAULT 0");
   }
   if (!cols.has("mission")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN mission TEXT");
+    addColumn("user_agents", "mission", "TEXT");
   }
   if (!cols.has("grant_usdc")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN grant_usdc TEXT NOT NULL DEFAULT '3000000'");
+    addColumn("user_agents", "grant_usdc", "TEXT NOT NULL DEFAULT '3000000'");
   }
   if (!cols.has("owner")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN owner TEXT");
+    addColumn("user_agents", "owner", "TEXT");
   }
   // Primitive v1: onchain identity, behavioral approach, and a creation state
   // machine. Rows that predate these read as active scouts with no identity
   // yet — the activation sweep notices the missing agent_id and repairs them.
   if (!cols.has("approach")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN approach TEXT NOT NULL DEFAULT 'scout'");
+    addColumn("user_agents", "approach", "TEXT NOT NULL DEFAULT 'scout'");
   }
   if (!cols.has("state")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN state TEXT NOT NULL DEFAULT 'active'");
+    addColumn("user_agents", "state", "TEXT NOT NULL DEFAULT 'active'");
   }
   if (!cols.has("agent_id")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN agent_id TEXT");
+    addColumn("user_agents", "agent_id", "TEXT");
   }
   if (!cols.has("identity_tx")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN identity_tx TEXT");
+    addColumn("user_agents", "identity_tx", "TEXT");
   }
   if (!cols.has("handle_tx")) {
-    db.exec("ALTER TABLE user_agents ADD COLUMN handle_tx TEXT");
+    addColumn("user_agents", "handle_tx", "TEXT");
   }
 }
 

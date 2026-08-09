@@ -7,7 +7,7 @@
  * errored — with its reason. Plain node:http, zero dependencies; the web arena
  * proxies to it so the receipts sit next to the market data.
  */
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { verifyMessage } from "viem";
 import { fullRoster, resolve } from "./roster.ts";
 import { createUserAgent } from "./agent-factory.ts";
@@ -101,7 +101,14 @@ const json = (res: import("node:http").ServerResponse, value: unknown, status = 
   res.end(JSON.stringify(value, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
 };
 
-const server = createServer(async (req, res) => {
+/**
+ * One request, handled. Anything it throws is caught by the server below
+ * rather than escaping: an async handler that rejects is an unhandled
+ * rejection, which ends the process — and since all three agent processes
+ * share a container, one rate-limited balance read inside one request was
+ * taking the whole economy down and restarting it every few minutes.
+ */
+async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
 
   if (url.pathname === "/health") return json(res, { ok: true });
@@ -351,7 +358,8 @@ const server = createServer(async (req, res) => {
       "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers": "content-type",
     });
-    return res.end();
+    res.end();
+    return;
   }
 
   if (url.pathname === "/runs") {
@@ -416,6 +424,15 @@ const server = createServer(async (req, res) => {
   }
 
   json(res, { error: "not found" }, 404);
+}
+
+const server = createServer((req, res) => {
+  handle(req, res).catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`${req.method} ${req.url} failed: ${msg}`);
+    if (res.headersSent) res.end();
+    else json(res, { error: "internal error" }, 500);
+  });
 });
 
 server.listen(PORT, () => {

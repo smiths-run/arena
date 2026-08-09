@@ -15,9 +15,19 @@ const CHILDREN = ["src/serve.ts", "src/analyst.ts", "src/orchestrator.ts"];
 let shuttingDown = false;
 const procs = CHILDREN.map((script) => {
   const p = spawn(process.execPath, [script], { stdio: "inherit" });
-  p.on("exit", (code) => {
+  p.on("exit", (code, signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
+
+    // A platform stopping us — a redeploy, a scale-down — sends SIGTERM to the
+    // whole group, so a child can be seen dying before our own signal handler
+    // runs. Reporting that as a crash is how a normal deploy came to look like
+    // one, and mailed a crash alert every time.
+    if (signal === "SIGTERM" || signal === "SIGINT") {
+      for (const q of procs) q.kill(signal);
+      process.exit(0);
+    }
+
     console.error(`${script} exited with ${code}; restarting the container`);
     for (const q of procs) q.kill("SIGTERM");
     process.exit(code ?? 1);

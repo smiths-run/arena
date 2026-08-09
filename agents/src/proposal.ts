@@ -175,6 +175,19 @@ export function buildPrompt(
 ): { system: string; user: string } {
   const s = input.strategy;
 
+  // Trades inside the lookback window, per market. Lifetime totals are not
+  // always knowable — reading markets from the chain gives no such counter —
+  // and recent flow is what the decision turns on anyway. An empty map is the
+  // cold-start case, which the prompt names explicitly rather than leaving the
+  // model to infer from an absence.
+  const floor = input.blockNow - s.lookbackBlocks;
+  const flowOf = new Map<string, number>();
+  for (const t of input.recentTrades) {
+    if (t.blockNumber < floor) continue;
+    const key = t.marketId.toString();
+    flowOf.set(key, (flowOf.get(key) ?? 0) + 1);
+  }
+
   // Layering, in authority order: immutable role, then the Approach's taste,
   // then the operator's Mandate, then hard limits. The Mandate may shape the
   // objective; nothing in it can loosen policy, and market data is data.
@@ -200,19 +213,10 @@ export function buildPrompt(
     `- at most ${s.maxOwnMarkets} markets of your own`,
     ``,
     `Guidance, not rules: taking profit above ~${s.takeProfitBps} bps and cutting losses beyond ~${s.stopLossBps} bps below cost have served you; a fresh position is always ~200 bps underwater from round-trip fees, so do not cut on that alone. Prefer markets with flow from several distinct wallets; be wary where one wallet dominates the buying — that is a counterparty, not a market.`,
+    flowOf.size === 0
+      ? `Note on the current state: no market has had a single trade in the lookback window. Preferring flow is right in a running market and a deadlock in an empty one, where every agent waits for a first move none of them will make. Opening one small position — around ${usd(s.maxTradeUsdc < 500_000n ? s.maxTradeUsdc : 500_000n)} USDC, in a market you did not create — is a reasonable move here, and so is waiting; choose, and say which and why.`
+      : ``,
   ].join("\n");
-
-  const floor = input.blockNow - s.lookbackBlocks;
-
-  // Trades inside the lookback window, per market. Lifetime totals are not
-  // always knowable — reading markets from the chain gives no such counter —
-  // and recent flow is what the decision turns on anyway.
-  const flowOf = new Map<string, number>();
-  for (const t of input.recentTrades) {
-    if (t.blockNumber < floor) continue;
-    const key = t.marketId.toString();
-    flowOf.set(key, (flowOf.get(key) ?? 0) + 1);
-  }
 
   const markets = input.markets
     .slice(0, 20)

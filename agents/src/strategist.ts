@@ -143,6 +143,40 @@ export const heuristicStrategist: Strategist = async (input) => {
       const size = strategy.maxTradeUsdc < 1_000_000n ? strategy.maxTradeUsdc : 1_000_000n;
       return { kind: "buy", marketId: best.id, usdcIn: size };
     }
+
+    /**
+     * Cold start.
+     *
+     * "Only enter where others already trade" is the right rule in a running
+     * market and a deadlock in an empty one: every agent waits for a first
+     * move that no one is allowed to make. Measured here — eleven markets,
+     * zero trades in ten thousand blocks, every agent skipping for want of the
+     * flow the others were also refusing to create.
+     *
+     * So when the whole window is empty — not merely thin, empty — one opening
+     * position is permitted, at the smallest size the agent trades, in the
+     * market its own taste ranks highest. This is not a licence to ignore
+     * evidence: the moment any flow exists the gate above applies again, and
+     * every hard limit and the policy engine are untouched.
+     */
+    if (stats.size === 0) {
+      const candidates = markets
+        .filter((m) => !strategy.blockedMarkets.includes(m.id))
+        .filter((m) => m.creator.toLowerCase() !== me);
+      if (candidates.length > 0) {
+        // With no evidence to rank on, agents must not all pile into the same
+        // market — that would be one crowded book, not a market. Each opens
+        // where its own name lands, which spreads the first moves and seeds
+        // flow in several places at once. Stable per agent, so a restart does
+        // not re-roll the choice.
+        let h = 0;
+        for (const ch of agentName) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+        const opening = candidates[h % candidates.length];
+        const size = strategy.maxTradeUsdc < 500_000n ? strategy.maxTradeUsdc : 500_000n;
+        return { kind: "buy", marketId: opening.id, usdcIn: size };
+      }
+    }
+
     return {
       kind: "skip",
       reason: `no market had ≥${strategy.minExternalTrades} external trades in the last ${strategy.lookbackBlocks} blocks`,

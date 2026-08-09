@@ -57,12 +57,40 @@ let cursor = 0;
  */
 const RETRY_PAUSE_MS = 600;
 
+/**
+ * Minimum gap between our requests, whichever endpoint they go to.
+ *
+ * The limit is per caller, so concurrency buys nothing and costs everything:
+ * unpaced, roughly half of all agent runs were ending as "Request exceeds
+ * defined limit" — an infrastructure failure recorded where a decision should
+ * be. Paced, a run takes a second or two longer and lands.
+ */
+const MIN_GAP_MS = 200;
+let queue: Promise<unknown> = Promise.resolve();
+let lastSentAt = 0;
+
+/** One request at a time, no faster than the endpoints will answer. */
+function paced<T>(send: () => Promise<T>): Promise<T> {
+  const run = queue.then(async () => {
+    const wait = lastSentAt + MIN_GAP_MS - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastSentAt = Date.now();
+    return send();
+  });
+  // The queue must survive a failure, or one error stalls every later call.
+  queue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 async function rotate<T>(call: (c: (typeof clients)[number]) => Promise<T>): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < clients.length * 2; attempt++) {
     const i = (cursor + attempt) % clients.length;
     try {
-      const result = await call(clients[i]);
+      const result = await paced(() => call(clients[i]));
       cursor = i; // stick with a working endpoint until it fails
       return result;
     } catch (err) {

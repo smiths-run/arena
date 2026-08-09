@@ -313,23 +313,24 @@ export async function ownMarketCountOnChain(address: `0x${string}`): Promise<num
 export async function claimableFees(
   address: `0x${string}`,
 ): Promise<Array<{ marketId: bigint; amount: bigint }>> {
-  const count = await pub.readContract({
-    address: MARKETS as `0x${string}`,
-    abi: chainAbi,
-    functionName: "marketCount",
-  });
+  // Creator fees exist only on markets this address created, and who created
+  // what is already known from the cached registry. Asking the chain about
+  // every market instead — twice per run, once for each equity snapshot — was
+  // two dozen eth_calls per agent per run, and the single largest reason runs
+  // were failing on the endpoints' rate limit.
+  const mine = (await fetchMarkets()).filter(
+    (m) => m.creator.toLowerCase() === address.toLowerCase(),
+  );
 
   const out: Array<{ marketId: bigint; amount: bigint }> = [];
-  for (let i = 0n; i < count; i++) {
-    const [, creator, , , fees] = await pub.readContract({
+  for (const m of mine) {
+    const [, , , , fees] = (await pub.readContract({
       address: MARKETS as `0x${string}`,
       abi: chainAbi,
       functionName: "markets",
-      args: [i],
-    });
-    if (creator.toLowerCase() === address.toLowerCase() && fees > 0n) {
-      out.push({ marketId: i, amount: fees });
-    }
+      args: [m.id],
+    })) as [`0x${string}`, `0x${string}`, bigint, bigint, bigint, bigint];
+    if (fees > 0n) out.push({ marketId: m.id, amount: fees });
   }
   return out;
 }

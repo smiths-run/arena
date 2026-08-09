@@ -108,7 +108,27 @@ const server = createServer(async (req, res) => {
     return json(res, { handle, valid, available, reserved });
   }
 
-  // The operator's one agent, by owner address.
+  // The operator's fleet: every agent this wallet runs, with quick stats.
+  if (req.method === "GET" && url.pathname === "/my/agents") {
+    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
+    if (!owner) return json(res, { agents: [] });
+    const net = store.netResultByAgent();
+    const rows = await Promise.all(
+      store.userAgentsListByOwner(owner).map(async (r) => ({
+        handle: r.name,
+        state: publicState(r),
+        approach: r.approach,
+        agentId: r.agent_id,
+        wallet: r.address,
+        cashUsdc: await balanceOf(r.address),
+        netResult: net.find((n) => n.agent === r.name)?.net ?? "0",
+        positions: store.positionsOf(r.name).filter((p) => p.tokens > 0n).length,
+      })),
+    );
+    return json(res, { agents: rows });
+  }
+
+  // The operator's first agent, by owner address (legacy single-agent shape).
   if (req.method === "GET" && url.pathname === "/agent/status") {
     const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
     const row = owner ? store.userAgentByOwner(owner) : undefined;
@@ -125,9 +145,12 @@ const server = createServer(async (req, res) => {
   }
 
   // One aggregate for the Run screen: identity, economics, positions, decisions.
+  // `handle` selects within the fleet; without it, the operator's first agent.
   if (req.method === "GET" && url.pathname === "/run/overview") {
     const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
-    const row = owner ? store.userAgentByOwner(owner) : undefined;
+    const wanted = (url.searchParams.get("handle") ?? "").toLowerCase();
+    const mine = owner ? store.userAgentsListByOwner(owner) : [];
+    const row = wanted ? mine.find((r) => r.name === wanted) : mine[0];
     if (!row) return json(res, { exists: false });
     const entry = resolve(row.name);
     if (!entry) return json(res, { exists: false });
@@ -207,11 +230,14 @@ const server = createServer(async (req, res) => {
   }
 
   // Operator controls: per-action wallet signature, no accounts anywhere.
+  // `handle` addresses one agent in the fleet; default is the first.
   if (req.method === "POST" && (url.pathname === "/agent/pause" || url.pathname === "/agent/resume")) {
     const body = await readJson(req);
     const owner = typeof body.owner === "string" ? body.owner.toLowerCase() : "";
-    const row = owner ? store.userAgentByOwner(owner) : undefined;
-    if (!row) return json(res, { error: "this wallet controls no agent" }, 404);
+    const mine = owner ? store.userAgentsListByOwner(owner) : [];
+    const wanted = typeof body.handle === "string" ? body.handle.toLowerCase() : "";
+    const row = wanted ? mine.find((r) => r.name === wanted) : mine[0];
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
     const action = url.pathname === "/agent/pause" ? "pause" : "resume";
     const err = await verifyOwnerAction(body, action, row.name, row.owner ?? "");
     if (err) return json(res, { error: err }, 403);

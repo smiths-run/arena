@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { Address } from "viem";
 import { connectWallet, sendUsdc, signMessage } from "@/lib/wallet";
-import { short, signedUsdc, usdc as fmtUsdc, EXPLORER, type RunOverview } from "@/lib/api";
+import { short, signedUsdc, usdc as fmtUsdc, EXPLORER, type MyAgent, type RunOverview } from "@/lib/api";
 
 const APPROACH_LABEL: Record<string, string> = {
   scout: "Scout",
@@ -43,27 +43,43 @@ export function RunScreen() {
   const hasWallet = mounted && Boolean((window as any).ethereum);
 
   const [account, setAccount] = useState<Address | null>(null);
+  const [fleet, setFleet] = useState<MyAgent[] | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [data, setData] = useState<RunOverview | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fundAmount, setFundAmount] = useState("5");
   const [showFund, setShowFund] = useState(false);
 
-  const refresh = useCallback(async (owner: Address) => {
-    try {
-      const res = await fetch(`/api/runs/run/overview?owner=${owner}`, { cache: "no-store" });
-      setData((await res.json()) as RunOverview);
-    } catch {
-      /* keep the last snapshot */
-    }
-  }, []);
+  const refresh = useCallback(
+    async (owner: Address, handle: string | null) => {
+      try {
+        const listRes = await fetch(`/api/runs/my/agents?owner=${owner}`, { cache: "no-store" });
+        const list = ((await listRes.json()).agents ?? []) as MyAgent[];
+        setFleet(list);
+        const active = handle && list.some((a) => a.handle === handle) ? handle : (list[0]?.handle ?? null);
+        if (active !== selected) setSelected(active);
+        if (active) {
+          const res = await fetch(`/api/runs/run/overview?owner=${owner}&handle=${active}`, {
+            cache: "no-store",
+          });
+          setData((await res.json()) as RunOverview);
+        } else {
+          setData({ exists: false });
+        }
+      } catch {
+        /* keep the last snapshot */
+      }
+    },
+    [selected],
+  );
 
   useEffect(() => {
     if (!account) return;
-    refresh(account);
-    const t = setInterval(() => refresh(account), 5000);
+    refresh(account, selected);
+    const t = setInterval(() => refresh(account, selected), 5000);
     return () => clearInterval(t);
-  }, [account, refresh]);
+  }, [account, selected, refresh]);
 
   const connect = async () => {
     setError(null);
@@ -83,15 +99,16 @@ export function RunScreen() {
     setBusy(`${action}…`);
     try {
       const ts = Date.now();
-      const signature = await signMessage(account, `Smiths Run: ${action} @${data.agent.handle} ${ts}`);
+      const handle = data.agent.handle;
+      const signature = await signMessage(account, `Smiths Run: ${action} @${handle} ${ts}`);
       const res = await fetch(`/api/runs/agent/${action}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: account, signature, ts }),
+        body: JSON.stringify({ owner: account, handle, signature, ts }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? `${action} failed`);
-      await refresh(account);
+      await refresh(account, handle);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -107,7 +124,7 @@ export function RunScreen() {
     try {
       await sendUsdc(account, data.agent.wallet as Address, fundAmount.trim());
       setShowFund(false);
-      await refresh(account);
+      await refresh(account, data.agent.handle);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -142,15 +159,15 @@ export function RunScreen() {
     );
   }
 
-  if (data && !data.exists) {
+  if (fleet !== null && fleet.length === 0) {
     return (
       <div className="card trade">
         <p className="dim" style={{ margin: 0 }}>
-          This wallet doesn&apos;t operate an agent yet.
+          This wallet doesn&apos;t operate any agents yet.
         </p>
         <div className="trade-row">
           <Link className="btn primary" href="/create">
-            Create your agent
+            Create your first agent
           </Link>
         </div>
       </div>
@@ -158,7 +175,7 @@ export function RunScreen() {
   }
 
   if (!data?.agent || !data.economics) {
-    return <p className="dim">Loading your agent…</p>;
+    return <p className="dim">Loading your agents…</p>;
   }
 
   const a = data.agent;
@@ -167,6 +184,25 @@ export function RunScreen() {
 
   return (
     <>
+      {fleet && (
+        <div className="fleet-strip">
+          {fleet.map((f) => (
+            <button
+              key={f.handle}
+              className={`fleet-chip ${selected === f.handle ? "active" : ""}`}
+              onClick={() => setSelected(f.handle)}
+              type="button"
+            >
+              <span className="fleet-handle">@{f.handle}</span>
+              <span className={`fleet-state ${f.state}`}>{STATE_LABEL[f.state] ?? f.state}</span>
+              <span className="mono dim">{f.cashUsdc ? `${fmtUsdc(f.cashUsdc)} USDC` : "…"}</span>
+            </button>
+          ))}
+          <Link href="/create" className="fleet-chip add">
+            + New agent
+          </Link>
+        </div>
+      )}
       <div className="run-header">
         <div>
           <h1 style={{ marginBottom: 2 }}>@{a.handle}</h1>

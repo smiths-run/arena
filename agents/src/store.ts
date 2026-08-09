@@ -639,11 +639,15 @@ export function userAgentCreate(row: {
   );
 }
 
-/** One operator wallet, one Smiths agent — this is the lookup that enforces it. */
+/** The operator's fleet, oldest first. */
+export function userAgentsListByOwner(owner: string): UserAgentRow[] {
+  return db
+    .prepare("SELECT * FROM user_agents WHERE owner = ? AND active = 1 ORDER BY created_at")
+    .all(owner.toLowerCase()) as unknown as UserAgentRow[];
+}
+
 export function userAgentByOwner(owner: string): UserAgentRow | undefined {
-  return db.prepare("SELECT * FROM user_agents WHERE owner = ? AND active = 1").get(
-    owner.toLowerCase(),
-  ) as UserAgentRow | undefined;
+  return userAgentsListByOwner(owner)[0];
 }
 
 export function userAgentSetState(name: string, state: string): void {

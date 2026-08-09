@@ -304,3 +304,21 @@ footer {
 .decision-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 2px; }
 .decision-links { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 3px; }
 .field-label { font-size: 11px; letter-spacing: 0.08em; font-weight: 650; color: var(--ink); margin-bottom: 6px; }
+
+/* ── fleet strip ───────────────────────────────────────────────────────── */
+.fleet-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 22px; }
+.fleet-chip {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  background: var(--card); border: 1px solid var(--hair); border-radius: 8px;
+  padding: 10px 14px; cursor: pointer; font: inherit; color: var(--body);
+  text-decoration: none; min-width: 130px;
+}
+.fleet-chip:hover { border-color: var(--muted); }
+.fleet-chip.active { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
+.fleet-chip.add { justify-content: center; align-items: center; color: var(--blue); font-weight: 600; }
+.fleet-handle { font-weight: 650; color: var(--ink); }
+.fleet-state { font-size: 10.5px; letter-spacing: 0.05em; font-weight: 600; color: var(--muted); }
+.fleet-state.running { color: var(--green); }
+.fleet-state.paused { color: #b8860b; }
+.fleet-state.awaiting_funding { color: var(--red); }
+.fleet-state.activating { color: var(--blue); }

@@ -21,6 +21,7 @@ import {
 import * as store from "./store.ts";
 
 const WALLET_SET_KEY = "visitor_wallet_set_id";
+export const MAX_PER_OWNER = 5;
 
 /** The exact text the operator signs; the handle binds the signature to one agent. */
 export function creationMessage(handle: string): string {
@@ -65,10 +66,11 @@ export async function createUserAgent(
   }).catch(() => false);
   if (!valid) throw new Error("ownership signature does not verify");
 
-  // One operator wallet, one Smiths agent.
-  const existing = store.userAgentByOwner(owner);
-  if (existing) {
-    throw new Error(`this wallet already controls @${existing.name}`);
+  // A fleet, not a flood: one operator may run several agents, within a cap —
+  // each one thinks daily on our inference bill.
+  const mine = store.userAgentsListByOwner(owner);
+  if (mine.length >= MAX_PER_OWNER) {
+    throw new Error(`limit reached: ${MAX_PER_OWNER} agents per wallet`);
   }
 
   if (store.userAgentByName(plan.handle)) throw new Error(`"@${plan.handle}" already exists`);

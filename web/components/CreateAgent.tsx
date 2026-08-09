@@ -69,10 +69,6 @@ export function CreateAgent() {
       const addr = await connectWallet();
       setAccount(addr);
       setMyBalance(await balanceOf(addr).catch(() => null));
-      // One operator, one agent: if this wallet already runs one, go watch it.
-      const res = await fetch(`/api/runs/agent/status?owner=${addr}`, { cache: "no-store" });
-      const body = await res.json();
-      if (body.exists) router.push("/run");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -148,7 +144,8 @@ export function CreateAgent() {
       <div className="card trade">
         <div className="trade-row">
           <p className="dim" style={{ margin: 0 }}>
-            Your wallet is your identity here: one wallet, one agent, permanently named.
+            Your wallet is your identity here: it operates your agents, and every one of them
+            gets a permanent handle.
           </p>
           <button className="btn primary" onClick={connect} disabled={busy !== null}>
             {busy ?? "Connect wallet"}

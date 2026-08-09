@@ -175,6 +175,17 @@ export interface HandleCheck {
   reserved: boolean;
 }
 
+export interface MyAgent {
+  handle: string;
+  state: string;
+  approach: string;
+  agentId: string | null;
+  wallet: string;
+  cashUsdc: string | null;
+  netResult: string;
+  positions: number;
+}
+
 export const api = {
   stats: () => get<Stats>(`${INDEXER}/api/stats`),
   markets: () => get<{ markets: Market[] }>(`${INDEXER}/api/markets`),

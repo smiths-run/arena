@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Address } from "viem";
-import { connectWallet, sendUsdc, signMessage } from "@/lib/wallet";
+import { connectWallet, onAccountsChanged, restoreWallet, sendUsdc, signMessage } from "@/lib/wallet";
 import { createGrant, dropGrant, loadGrant, tick, type PilotGrant } from "@/lib/pilot";
 import { short, signedUsdc, usdc as fmtUsdc, EXPLORER, type MyAgent, type RunOverview } from "@/lib/api";
 
@@ -44,6 +44,7 @@ export function RunScreen() {
   const hasWallet = mounted && Boolean((window as any).ethereum);
 
   const [account, setAccount] = useState<Address | null>(null);
+  const [restoring, setRestoring] = useState(true);
   const [fleet, setFleet] = useState<MyAgent[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [data, setData] = useState<RunOverview | null>(null);
@@ -90,7 +91,32 @@ export function RunScreen() {
     return () => clearInterval(t);
   }, [account, selected, refresh]);
 
-  // Recover a stored pilot grant the moment the wallet connects.
+  // Coming back to Run is not a new introduction: the wallet already knows
+  // this site, so ask it silently who is connected instead of prompting.
+  useEffect(() => {
+    let cancelled = false;
+    restoreWallet().then((a) => {
+      if (cancelled) return;
+      if (a) setAccount(a);
+      setRestoring(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Switching or disconnecting an account in the wallet lands the fleet.
+  useEffect(
+    () =>
+      onAccountsChanged((a) => {
+        setAccount(a);
+        if (!a) setGrant(null);
+      }),
+    [],
+  );
+
+  // Recover a stored pilot grant the moment the wallet is known — a returning
+  // operator resumes flying without signing again.
   useEffect(() => {
     if (account) setGrant(loadGrant(account));
   }, [account]);
@@ -206,6 +232,10 @@ export function RunScreen() {
         </p>
       </div>
     );
+  }
+
+  if (!account && restoring) {
+    return <p className="dim">Finding your wallet…</p>;
   }
 
   if (!account) {

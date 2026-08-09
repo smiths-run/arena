@@ -8,7 +8,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Address } from "viem";
-import { connectWallet, sendUsdc, signMessage, balanceOf } from "@/lib/wallet";
+import {
+  balanceOf,
+  connectWallet,
+  onAccountsChanged,
+  restoreWallet,
+  sendUsdc,
+  signMessage,
+} from "@/lib/wallet";
 import { short, usdc as fmtUsdc, type HandleCheck } from "@/lib/api";
 
 const APPROACHES = [
@@ -46,6 +53,22 @@ export function CreateAgent() {
   const [funded, setFunded] = useState(false);
 
   const normalized = handle.trim().toLowerCase().replace(/^@/, "");
+
+  // An operator who already authorized this site shouldn't have to connect
+  // again on every visit — eth_accounts answers without prompting.
+  useEffect(() => {
+    let cancelled = false;
+    restoreWallet().then(async (a) => {
+      if (cancelled || !a) return;
+      setAccount(a);
+      setMyBalance(await balanceOf(a).catch(() => null));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => onAccountsChanged((a) => setAccount(a)), []);
 
   // Live availability, debounced; the contract has the final word at claim time.
   useEffect(() => {

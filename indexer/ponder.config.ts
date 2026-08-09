@@ -1,4 +1,5 @@
 import { createConfig } from "ponder";
+import { custom, http } from "viem";
 import { MarketsAbi } from "./abis/Markets";
 import { IdentityRegistryAbi } from "./abis/IdentityRegistry";
 
@@ -9,22 +10,71 @@ import { IdentityRegistryAbi } from "./abis/IdentityRegistry";
  * Arc-specific rule carried through the whole app: order by (blockNumber, logIndex),
  * never by timestamp — sub-second blocks can share one.
  */
+
+/**
+ * Every public Arc endpoint answers roughly one request a second and returns a
+ * JSON-RPC error above that. Ponder 0.17 deprecated maxRequestsPerSecond
+ * ("handled automatically"), and automatic is wrong here: measured on the
+ * deployed indexer, 110 successful getLogs calls came with 392 errors, and each
+ * error shrinks the block range, so the backfill collapsed to a crawl that
+ * would have taken days.
+ *
+ * So the throttle is ours. One request at a time, a fixed gap between them,
+ * rotating across the endpoints that can serve history — about four requests a
+ * second spread over four nodes, which none of them refuse.
+ */
+const ENDPOINTS = [
+  "https://rpc.testnet.arc.io",
+  "https://rpc.quicknode.testnet.arc.io",
+  "https://rpc.testnet.arc.network",
+  "https://rpc.quicknode.testnet.arc.network",
+];
+
+const GAP_MS = 250;
+
+function pacedRotatingTransport() {
+  const pool = ENDPOINTS.map((url) => http(url, { retryCount: 0, timeout: 30_000 })({}));
+  let cursor = 0;
+  let tail: Promise<unknown> = Promise.resolve();
+  let lastSentAt = 0;
+
+  return custom({
+    async request(body: { method: string; params?: unknown }) {
+      const run = tail.then(async () => {
+        const wait = lastSentAt + GAP_MS - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        lastSentAt = Date.now();
+
+        let lastErr: unknown;
+        for (let i = 0; i < pool.length; i++) {
+          const at = (cursor + i) % pool.length;
+          try {
+            const result = await pool[at].request(body as never);
+            cursor = at; // stay on whatever is answering
+            return result;
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+        throw lastErr;
+      });
+      // The queue must survive a failed request, or one error stalls the sync.
+      tail = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run;
+    },
+  });
+}
 export default createConfig({
   chains: {
     arcTestnet: {
       id: 5042002,
-      // Rotating across the public endpoints is what makes the backfill finish —
-      // but only across endpoints that can actually serve history. Blockdaemon's
-      // Arc node is pruned and answers every historical eth_getLogs with error
-      // 4444, so including it poisoned one in five requests and dragged the whole
-      // sync down with it. Override with a private endpoint via
-      // PONDER_RPC_URL_5042002 in production.
-      rpc: process.env.PONDER_RPC_URL_5042002 ?? [
-        "https://rpc.testnet.arc.io",
-        "https://rpc.quicknode.testnet.arc.io",
-        "https://rpc.testnet.arc.network",
-        "https://rpc.quicknode.testnet.arc.network",
-      ],
+      // Blockdaemon's Arc node is pruned and answers every historical getLogs
+      // with error 4444, so it is absent from the pool above. A private endpoint
+      // via PONDER_RPC_URL_5042002 needs no pacing and bypasses all of this.
+      rpc: process.env.PONDER_RPC_URL_5042002 ?? pacedRotatingTransport(),
       // Measured on every endpoint above: 10k is accepted, 50k is refused. Left
       // to infer this from error messages, Ponder halves the range on each
       // failure and never recovers it, so a poisoned run ends up crawling a

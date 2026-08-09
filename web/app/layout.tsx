@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
 import { Tabs } from "@/components/Tabs";
+import { WalletButton } from "@/components/WalletButton";
 
 export const metadata: Metadata = {
   title: "Smiths Run",
@@ -18,7 +19,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/" className="brand">
               Smiths Run<span>ARC TESTNET</span>
             </Link>
-            <Tabs />
+            <div className="top-right">
+              <Tabs />
+              <WalletButton />
+            </div>
           </header>
           {children}
           <footer>

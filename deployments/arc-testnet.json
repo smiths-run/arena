@@ -3,7 +3,14 @@
   "explorer": "https://testnet.arcscan.app",
   "usdc": "0x3600000000000000000000000000000000000000",
   "contracts": {
-    "Markets": "0xecA93762389883C7128D5a67b8d22EC28552f352"
+    "Markets": "0xecA93762389883C7128D5a67b8d22EC28552f352",
+    "SmithsHandles": "0x7f27Bba3Fa5A5D338febc396d5a57FE6773d9C68",
+    "IdentityRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+  },
+  "handles": {
+    "anvil": 859270,
+    "bellows": 859271,
+    "tongs": 859272
   },
   "markets": [
     {

@@ -15,6 +15,7 @@ const chainAbi = parseAbi([
   "function marketCount() view returns (uint256)",
   "function markets(uint256) view returns (address token, address creator, uint256 reserveUsdc, uint256 reserveToken, uint256 creatorFees, uint64 createdAtBlock)",
   "function symbol() view returns (string)",
+  "function name() view returns (string)",
 ]);
 
 /** The two events that are flow: someone put money in, someone took it out. */
@@ -89,6 +90,7 @@ export interface MarketView {
   id: bigint;
   creator: `0x${string}`;
   symbol: string;
+  name: string;
   reserveUsdc: bigint;
   /** Lifetime trades, or null when nothing authoritative knows the total. */
   tradeCount: number | null;
@@ -120,6 +122,7 @@ interface MarketFacts {
   token: `0x${string}`;
   creator: `0x${string}`;
   symbol: string;
+  name: string;
 }
 
 const known = new Map<string, MarketFacts>();
@@ -160,10 +163,11 @@ export async function fetchMarkets(): Promise<MarketView[]> {
         functionName: "markets",
         args: [id],
       })) as [`0x${string}`, `0x${string}`, bigint, bigint, bigint, bigint];
-      const symbol = (await pub
-        .readContract({ address: token, abi: chainAbi, functionName: "symbol" })
-        .catch(() => "")) as string;
-      known.set(key, { id, token, creator, symbol });
+      const [symbol, name] = await Promise.all([
+        pub.readContract({ address: token, abi: chainAbi, functionName: "symbol" }).catch(() => ""),
+        pub.readContract({ address: token, abi: chainAbi, functionName: "name" }).catch(() => ""),
+      ]);
+      known.set(key, { id, token, creator, symbol: symbol as string, name: name as string });
       reserves.set(key, reserveUsdc);
     }
 
@@ -172,11 +176,16 @@ export async function fetchMarkets(): Promise<MarketView[]> {
     // exactly this way. Retry the blanks — the rest of the row stays usable
     // meanwhile.
     for (const m of known.values()) {
-      if (m.symbol) continue;
-      const symbol = (await pub
-        .readContract({ address: m.token, abi: chainAbi, functionName: "symbol" })
-        .catch(() => "")) as string;
-      if (symbol) known.set(m.id.toString(), { ...m, symbol });
+      if (m.symbol && m.name) continue;
+      const [symbol, name] = await Promise.all([
+        m.symbol
+          ? Promise.resolve(m.symbol)
+          : pub.readContract({ address: m.token, abi: chainAbi, functionName: "symbol" }).catch(() => ""),
+        m.name
+          ? Promise.resolve(m.name)
+          : pub.readContract({ address: m.token, abi: chainAbi, functionName: "name" }).catch(() => ""),
+      ]);
+      known.set(m.id.toString(), { ...m, symbol: symbol as string, name: name as string });
     }
 
     checkedAt = Date.now();
@@ -186,6 +195,7 @@ export async function fetchMarkets(): Promise<MarketView[]> {
     id: m.id,
     creator: m.creator,
     symbol: m.symbol,
+    name: m.name,
     reserveUsdc: reserves.get(m.id.toString()) ?? 0n,
     // Lifetime totals are a history question and the chain does not keep a
     // counter; null says "unknown" so scoring falls back to the flow window

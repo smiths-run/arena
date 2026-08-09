@@ -15,6 +15,7 @@ import { handleAvailable } from "./identity.ts";
 import { RESERVED_NAMES } from "./visitor-strategy.ts";
 import { equityOf } from "./equity.ts";
 import { runOnce } from "./runtime.ts";
+import { historyStatus } from "./history.ts";
 import { decide } from "./schedule.ts";
 import { heuristicStrategist } from "./strategist.ts";
 import { llmStrategist } from "./llm-strategist.ts";
@@ -388,14 +389,22 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const key = t.marketId.toString();
       recentOf.set(key, (recentOf.get(key) ?? 0) + 1);
     }
+    const history = new Map(store.marketHistory().map((h) => [h.marketId, h]));
     return json(res, {
       markets: markets.map((m) => ({
         id: m.id.toString(),
         symbol: m.symbol,
+        name: m.name,
         creator: m.creator,
         reserveUsdc: m.reserveUsdc.toString(),
         recentTrades: recentOf.get(m.id.toString()) ?? 0,
+        // Lifetime totals, as far as the history walk has read. Null until it
+        // has passed this market's launch, so the page can say "not yet"
+        // instead of "zero".
+        volumeUsdc: history.get(m.id.toString())?.volumeUsdc ?? null,
+        tradeCount: history.get(m.id.toString())?.tradeCount ?? null,
       })),
+      history: historyStatus(),
       // Newest first, the way a reader scans it.
       recentTrades: [...flow]
         .sort((a, b) =>

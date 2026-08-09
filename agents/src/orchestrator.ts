@@ -12,6 +12,7 @@ import { decide } from "./schedule.ts";
 import { heuristicStrategist, type Strategist } from "./strategist.ts";
 import { llmStrategist } from "./llm-strategist.ts";
 import { ensureHandle, ensureIdentity } from "./identity.ts";
+import { advanceHistory } from "./history.ts";
 import * as executor from "./executor.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
@@ -52,6 +53,9 @@ for (const name of heldAgents()) {
 
 /** Enough for the 1 USDC launch, the 0.5 reserve and gas — the activation bar. */
 const ACTIVATION_MINIMUM = 2_000_000n;
+
+/** Log the history walk's progress while it runs, and its arrival once. */
+let historyDone = false;
 
 /**
  * The activation sweep: one agent per pass, at most one attempt a minute.
@@ -106,6 +110,27 @@ async function pass(): Promise<void> {
   // The heartbeat is how Mission Control knows this loop is alive; stamped per
   // pass, not per run, so a quiet pass still counts as presence.
   store.heartbeat();
+
+  // Walk a few ranges of market history per pass. It shares the agents' rate
+  // limit budget, which is why it takes four ranges and not a hundred: the
+  // whole history lands within minutes and then only tails the head.
+  try {
+    const { at, head, caughtUp } = await advanceHistory();
+    if (caughtUp) {
+      if (!historyDone) {
+        console.log("market history caught up with the chain");
+        historyDone = true;
+      }
+    } else {
+      historyDone = false;
+      const done = Number(at - 55_002_424n);
+      const total = Number(head - 55_002_424n);
+      console.log(`market history ${((done / total) * 100).toFixed(1)}% — block ${at}`);
+    }
+  } catch (err) {
+    console.log(`history walk paused — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   await activateOneVisitor();
   const held = heldAgents();
   // Re-read the roster every pass: an agent activated a second ago is part

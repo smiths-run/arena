@@ -5,23 +5,18 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 export const dynamic = "force-dynamic";
 
 export default async function Arena() {
-  // The chain says what exists; the indexer adds history to it where it has
-  // caught up. Neither failing should blank the page.
-  const [chain, indexed] = await Promise.all([
-    api.chain().catch(() => ({ markets: [], recentTrades: [] })),
-    api.markets().catch(() => ({ markets: [] })),
-  ]);
+  // Everything here comes from the chain: what exists, what it holds, what has
+  // traded through it. Lifetime totals are walked block by block rather than
+  // asked of an indexer, so they arrive complete or say they have not yet.
+  const chain = await api
+    .chain()
+    .catch(() => ({ markets: [], recentTrades: [], history: null as null | { caughtUp: boolean } }));
 
-  const historyOf = new Map(indexed.markets.map((m) => [m.id, m]));
-  const markets = chain.markets.map((m) => ({
-    ...m,
-    name: historyOf.get(m.id)?.name ?? "",
-    volumeUsdc: historyOf.get(m.id)?.volumeUsdc ?? null,
-    tradeCount: historyOf.get(m.id)?.tradeCount ?? null,
-  }));
-
-  const curveTotal = chain.markets.reduce((sum, m) => sum + BigInt(m.reserveUsdc), 0n);
+  const markets = chain.markets;
   const activity = chain.recentTrades;
+  const curveTotal = markets.reduce((sum, m) => sum + BigInt(m.reserveUsdc), 0n);
+  const volumeTotal = markets.reduce((sum, m) => sum + BigInt(m.volumeUsdc ?? "0"), 0n);
+  const stillReading = chain.history !== null && !chain.history.caughtUp;
 
   return (
     <main>
@@ -42,16 +37,18 @@ export default async function Arena() {
           <div className="label">markets</div>
         </div>
         <div className="counter">
-          <div className="value">{activity.length}</div>
-          <div className="label">recent trades</div>
+          <div className="value">
+            {markets.reduce((n, m) => n + (m.tradeCount ?? 0), 0)}
+          </div>
+          <div className="label">trades</div>
+        </div>
+        <div className="counter">
+          <div className="value">{usdcRounded(volumeTotal)}</div>
+          <div className="label">USDC volume</div>
         </div>
         <div className="counter">
           <div className="value">{usdcRounded(curveTotal)}</div>
           <div className="label">USDC in curves</div>
-        </div>
-        <div className="counter">
-          <div className="value">{markets.filter((m) => m.recentTrades > 0).length}</div>
-          <div className="label">markets with flow</div>
         </div>
       </div>
 
@@ -66,7 +63,7 @@ export default async function Arena() {
                   <th>Creator</th>
                   <th style={{ textAlign: "right" }}>Curve USDC</th>
                   <th style={{ textAlign: "right" }}>Volume</th>
-                  <th style={{ textAlign: "right" }}>Recent</th>
+                  <th style={{ textAlign: "right" }}>Trades</th>
                 </tr>
               </thead>
               <tbody>
@@ -81,16 +78,22 @@ export default async function Arena() {
                     <td className="mono" style={{ textAlign: "right" }}>
                       {usdcRounded(m.reserveUsdc)}
                     </td>
-                    <td className="mono dim" style={{ textAlign: "right" }}>
+                    <td className="mono" style={{ textAlign: "right" }}>
                       {m.volumeUsdc === null ? "—" : usdcRounded(m.volumeUsdc)}
                     </td>
                     <td className="mono" style={{ textAlign: "right" }}>
-                      {m.recentTrades}
+                      {m.tradeCount ?? "—"}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {stillReading && (
+              <p className="dim" style={{ padding: "12px 0 2px", fontSize: 13 }}>
+                Reading trade history from the chain — totals shown as “—” have not been reached
+                yet. Curve balances above are live either way.
+              </p>
+            )}
           </div>
         </section>
 

@@ -180,9 +180,19 @@ export interface MyAgent {
 export interface ChainMarket {
   id: string;
   symbol: string;
+  name: string;
   creator: string;
   reserveUsdc: string;
   recentTrades: number;
+  /** Lifetime totals, or null where the history walk has not reached yet. */
+  volumeUsdc: string | null;
+  tradeCount: number | null;
+}
+
+export interface HistoryStatus {
+  cursor: string;
+  head: string;
+  caughtUp: boolean;
 }
 
 export interface ChainTrade {
@@ -198,7 +208,10 @@ export interface ChainTrade {
 }
 
 export const api = {
-  chain: () => get<{ markets: ChainMarket[]; recentTrades: ChainTrade[] }>(`${RECEIPTS}/markets`),
+  chain: () =>
+    get<{ markets: ChainMarket[]; recentTrades: ChainTrade[]; history: HistoryStatus }>(
+      `${RECEIPTS}/markets`,
+    ),
   stats: () => get<Stats>(`${INDEXER}/api/stats`),
   markets: () => get<{ markets: Market[] }>(`${INDEXER}/api/markets`),
   market: (id: string) => get<Market>(`${INDEXER}/api/markets/${id}`),

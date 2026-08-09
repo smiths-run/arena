@@ -760,6 +760,57 @@ export function settingSet(key: string, value: string): void {
   ).run(key, value);
 }
 
+/**
+ * Lifetime volume and trade count per market, accumulated by the history walk.
+ *
+ * The totals and the cursor that produced them are written together: a crash
+ * between them would either double-count a range or skip one, and both are
+ * wrong in a number the site presents as fact.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS market_history (
+    market_id TEXT PRIMARY KEY,
+    volume_usdc TEXT NOT NULL DEFAULT '0',
+    trade_count INTEGER NOT NULL DEFAULT 0
+  );
+`);
+
+export function applyHistoryRange(
+  deltas: Map<string, { usdc: bigint; count: number }>,
+  nextCursor: string,
+): void {
+  const add = db.prepare(
+    `INSERT INTO market_history (market_id, volume_usdc, trade_count)
+     VALUES (?, ?, ?)
+     ON CONFLICT(market_id) DO UPDATE SET
+       volume_usdc = CAST(CAST(market_history.volume_usdc AS INTEGER) + CAST(excluded.volume_usdc AS INTEGER) AS TEXT),
+       trade_count = market_history.trade_count + excluded.trade_count`,
+  );
+  const setCursor = db.prepare(
+    "INSERT INTO settings (key, value) VALUES ('history_cursor_block', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [marketId, d] of deltas) add.run(marketId, d.usdc.toString(), d.count);
+    setCursor.run(nextCursor);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+export function marketHistory(): Array<{ marketId: string; volumeUsdc: string; tradeCount: number }> {
+  return (
+    db.prepare("SELECT market_id, volume_usdc, trade_count FROM market_history").all() as Array<{
+      market_id: string;
+      volume_usdc: string;
+      trade_count: number;
+    }>
+  ).map((r) => ({ marketId: r.market_id, volumeUsdc: r.volume_usdc, tradeCount: r.trade_count }));
+}
+
 export function llmCallRecord(
   agent: string,
   model: string,

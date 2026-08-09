@@ -23,12 +23,26 @@ import { IdentityRegistryAbi } from "./abis/IdentityRegistry";
  * rotating across the endpoints that can serve history — about four requests a
  * second spread over four nodes, which none of them refuse.
  */
-const ENDPOINTS = [
-  "https://rpc.testnet.arc.io",
-  "https://rpc.quicknode.testnet.arc.io",
-  "https://rpc.testnet.arc.network",
-  "https://rpc.quicknode.testnet.arc.network",
-];
+/**
+ * PONDER_RPC_URL_5042002 overrides the pool (comma-separate for several), but
+ * it does not opt out of pacing: handing Ponder a bare URL is what left the
+ * deployed indexer erroring on three requests in four, and an endpoint that
+ * can take more than four a second loses nothing — the whole backfill is only
+ * about a hundred requests either way.
+ */
+const ENDPOINTS = (process.env.PONDER_RPC_URL_5042002 ?? "")
+  .split(",")
+  .map((u) => u.trim())
+  .filter(Boolean);
+
+if (ENDPOINTS.length === 0) {
+  ENDPOINTS.push(
+    "https://rpc.testnet.arc.io",
+    "https://rpc.quicknode.testnet.arc.io",
+    "https://rpc.testnet.arc.network",
+    "https://rpc.quicknode.testnet.arc.network",
+  );
+}
 
 const GAP_MS = 250;
 
@@ -72,9 +86,8 @@ export default createConfig({
     arcTestnet: {
       id: 5042002,
       // Blockdaemon's Arc node is pruned and answers every historical getLogs
-      // with error 4444, so it is absent from the pool above. A private endpoint
-      // via PONDER_RPC_URL_5042002 needs no pacing and bypasses all of this.
-      rpc: process.env.PONDER_RPC_URL_5042002 ?? pacedRotatingTransport(),
+      // with error 4444, so it is absent from the default pool.
+      rpc: pacedRotatingTransport(),
       // Measured on every endpoint above: 10k is accepted, 50k is refused. Left
       // to infer this from error messages, Ponder halves the range on each
       // failure and never recovers it, so a poisoned run ends up crawling a

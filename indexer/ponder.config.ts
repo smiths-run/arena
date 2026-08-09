@@ -13,21 +13,24 @@ export default createConfig({
   chains: {
     arcTestnet: {
       id: 5042002,
-      // Every public Arc endpoint rate-limits eth_getLogs into tiny ranges; rotating
-      // across all of them is what makes the backfill finish. Override with a private
-      // endpoint via PONDER_RPC_URL_5042002 in production.
+      // Rotating across the public endpoints is what makes the backfill finish —
+      // but only across endpoints that can actually serve history. Blockdaemon's
+      // Arc node is pruned and answers every historical eth_getLogs with error
+      // 4444, so including it poisoned one in five requests and dragged the whole
+      // sync down with it. Override with a private endpoint via
+      // PONDER_RPC_URL_5042002 in production.
       rpc: process.env.PONDER_RPC_URL_5042002 ?? [
         "https://rpc.testnet.arc.io",
         "https://rpc.quicknode.testnet.arc.io",
-        "https://rpc.blockdaemon.testnet.arc.io",
         "https://rpc.testnet.arc.network",
         "https://rpc.quicknode.testnet.arc.network",
       ],
-      // Measured, not guessed: these endpoints accept 10k-block getLogs ranges
-      // but rate-limit past ~1-2 requests/second. Ponder's default of 50 rps
-      // triggers a 429 storm, which collapses its ranges and leaves the sync
-      // crawling for days. Polite is fast here.
-      maxRequestsPerSecond: 5,
+      // Measured on every endpoint above: 10k is accepted, 50k is refused. Left
+      // to infer this from error messages, Ponder halves the range on each
+      // failure and never recovers it, so a poisoned run ends up crawling a
+      // sub-thousand-block window forever. Pinning the known-good range keeps
+      // the whole backfill at roughly a hundred requests.
+      ethGetLogsBlockRange: 10_000,
     },
   },
   contracts: {

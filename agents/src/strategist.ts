@@ -123,6 +123,9 @@ export const heuristicStrategist: Strategist = async (input) => {
       const topShare = Math.max(...s.traders.values()) / s.count;
       const blocksAgo = Number(blockNow - s.lastBlock);
       const recency = 1 / (1 + blocksAgo / 300);
+      // An unknown lifetime total (null, when reading markets straight from the
+      // chain) falls back to the flow window rather than counting as zero,
+      // which would make every market look brand new to a scout.
       const lifetime = tradeCountOf.get(s.id.toString()) ?? s.count;
       const emerging = 1 / (1 + lifetime / 10);
 

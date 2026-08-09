@@ -202,12 +202,26 @@ export function buildPrompt(
     `Guidance, not rules: taking profit above ~${s.takeProfitBps} bps and cutting losses beyond ~${s.stopLossBps} bps below cost have served you; a fresh position is always ~200 bps underwater from round-trip fees, so do not cut on that alone. Prefer markets with flow from several distinct wallets; be wary where one wallet dominates the buying — that is a counterparty, not a market.`,
   ].join("\n");
 
+  const floor = input.blockNow - s.lookbackBlocks;
+
+  // Trades inside the lookback window, per market. Lifetime totals are not
+  // always knowable — reading markets from the chain gives no such counter —
+  // and recent flow is what the decision turns on anyway.
+  const flowOf = new Map<string, number>();
+  for (const t of input.recentTrades) {
+    if (t.blockNumber < floor) continue;
+    const key = t.marketId.toString();
+    flowOf.set(key, (flowOf.get(key) ?? 0) + 1);
+  }
+
   const markets = input.markets
     .slice(0, 20)
-    .map((m) => `  #${m.id} ${m.symbol} reserveUsdc=${usd(m.reserveUsdc)} trades=${m.tradeCount}`)
+    .map(
+      (m) =>
+        `  #${m.id} ${m.symbol} reserveUsdc=${usd(m.reserveUsdc)} recentTrades=${flowOf.get(m.id.toString()) ?? 0}`,
+    )
     .join("\n");
 
-  const floor = input.blockNow - s.lookbackBlocks;
   const trades = input.recentTrades
     .filter((t) => t.blockNumber >= floor)
     .slice(0, 30)

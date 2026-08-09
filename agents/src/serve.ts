@@ -8,10 +8,47 @@
  * proxies to it so the receipts sit next to the market data.
  */
 import { createServer, type IncomingMessage } from "node:http";
-import { fullRoster } from "./roster.ts";
+import { verifyMessage } from "viem";
+import { fullRoster, resolve } from "./roster.ts";
 import { createUserAgent } from "./agent-factory.ts";
+import { handleAvailable } from "./identity.ts";
+import { RESERVED_NAMES } from "./visitor-strategy.ts";
+import { equityOf } from "./equity.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
+
+const HANDLE_RE = /^[a-z][a-z0-9-]{2,15}$/;
+
+/** Map internal facts to the public product state. */
+function publicState(row: { state: string; name: string }): string {
+  if (row.state !== "active") return row.state;
+  return store.isPaused(row.name) ? "paused" : "running";
+}
+
+/** Per-action wallet auth: a fresh signature over an explicit message. */
+async function verifyOwnerAction(
+  body: Record<string, unknown>,
+  action: string,
+  handle: string,
+  expectedOwner: string,
+): Promise<string | null> {
+  if (typeof body.owner !== "string" || typeof body.signature !== "string") {
+    return "missing owner or signature";
+  }
+  if (body.owner.toLowerCase() !== expectedOwner.toLowerCase()) {
+    return "not this agent's operator";
+  }
+  const ts = Number(body.ts ?? 0);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > 5 * 60_000) {
+    return "stale request — sign again";
+  }
+  const ok = await verifyMessage({
+    address: body.owner as `0x${string}`,
+    message: `Smiths Run: ${action} @${handle} ${ts}`,
+    signature: body.signature as `0x${string}`,
+  }).catch(() => false);
+  return ok ? null : "signature does not verify";
+}
 
 // Wallet balances for the roster listing: one RPC read per agent, cached 30s,
 // and a failure shows as null rather than taking the listing down.
@@ -58,6 +95,129 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
 
   if (url.pathname === "/health") return json(res, { ok: true });
+
+  // Handle availability — a convenience mirror; the contract is the authority.
+  if (req.method === "GET" && url.pathname.startsWith("/handles/")) {
+    const handle = decodeURIComponent(url.pathname.slice("/handles/".length)).toLowerCase();
+    const valid = HANDLE_RE.test(handle);
+    const reserved = RESERVED_NAMES.has(handle);
+    let available = false;
+    if (valid && !reserved && !store.userAgentByName(handle)) {
+      available = await handleAvailable(handle).catch(() => false);
+    }
+    return json(res, { handle, valid, available, reserved });
+  }
+
+  // The operator's one agent, by owner address.
+  if (req.method === "GET" && url.pathname === "/agent/status") {
+    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
+    const row = owner ? store.userAgentByOwner(owner) : undefined;
+    if (!row) return json(res, { exists: false });
+    return json(res, {
+      exists: true,
+      handle: row.name,
+      state: publicState(row),
+      wallet: row.address,
+      agentId: row.agent_id,
+      cashUsdc: (await balanceOf(row.address)) ?? "0",
+      activationMinimumUsdc: "2000000",
+    });
+  }
+
+  // One aggregate for the Run screen: identity, economics, positions, decisions.
+  if (req.method === "GET" && url.pathname === "/run/overview") {
+    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
+    const row = owner ? store.userAgentByOwner(owner) : undefined;
+    if (!row) return json(res, { exists: false });
+    const entry = resolve(row.name);
+    if (!entry) return json(res, { exists: false });
+
+    let equity: Awaited<ReturnType<typeof equityOf>> | null = null;
+    try {
+      equity = await equityOf(row.name, row.address as `0x${string}`);
+    } catch {
+      equity = null;
+    }
+
+    const positions = [];
+    for (const p of store.positionsOf(row.name)) {
+      if (p.tokens <= 0n) continue;
+      let value: bigint | null = null;
+      try {
+        value = (await obs.quoteSell(p.marketId, p.tokens)).usdcOut;
+      } catch {
+        value = null;
+      }
+      positions.push({
+        marketId: p.marketId.toString(),
+        tokens: p.tokens.toString(),
+        costUsdc: p.costUsdc.toString(),
+        valueUsdc: value?.toString() ?? null,
+      });
+    }
+
+    const decisions = (store.db
+      .prepare("SELECT * FROM runs WHERE agent = ? ORDER BY id DESC LIMIT 12")
+      .all(row.name) as Array<Record<string, unknown>>).map((r) => ({
+      id: r.id,
+      at: r.finished_at ?? r.started_at,
+      outcome: r.outcome,
+      action: r.action_kind,
+      marketId: r.market_id,
+      usdc: r.usdc,
+      reason: String(r.reason ?? "").split("\n")[0].slice(0, 160),
+      txHash: r.tx_hash,
+      signed: Boolean(r.receipt_signature),
+      netResult:
+        r.equity_open && r.equity_close
+          ? (BigInt(r.equity_close as string) - BigInt(r.equity_open as string)).toString()
+          : null,
+    }));
+
+    const risk =
+      entry.strategy.maxTradeUsdc <= 500_000n
+        ? "low"
+        : entry.strategy.maxTradeUsdc >= 2_000_000n
+          ? "high"
+          : "balanced";
+
+    return json(res, {
+      exists: true,
+      agent: {
+        handle: row.name,
+        agentId: row.agent_id,
+        wallet: row.address,
+        approach: entry.approach,
+        risk,
+        mandate: entry.mandate,
+        state: publicState(row),
+        identityTx: row.identity_tx,
+        handleTx: row.handle_tx,
+      },
+      economics: {
+        equity: equity?.total?.toString() ?? null,
+        cash: equity?.walletUsdc?.toString() ?? (await balanceOf(row.address)),
+        netResult: store.netResultByAgent().find((n) => n.agent === row.name)?.net ?? "0",
+        positionCount: positions.length,
+        claimableFees: equity?.claimableCreatorFees?.toString() ?? null,
+      },
+      positions,
+      recentDecisions: decisions,
+    });
+  }
+
+  // Operator controls: per-action wallet signature, no accounts anywhere.
+  if (req.method === "POST" && (url.pathname === "/agent/pause" || url.pathname === "/agent/resume")) {
+    const body = await readJson(req);
+    const owner = typeof body.owner === "string" ? body.owner.toLowerCase() : "";
+    const row = owner ? store.userAgentByOwner(owner) : undefined;
+    if (!row) return json(res, { error: "this wallet controls no agent" }, 404);
+    const action = url.pathname === "/agent/pause" ? "pause" : "resume";
+    const err = await verifyOwnerAction(body, action, row.name, row.owner ?? "");
+    if (err) return json(res, { error: err }, 403);
+    store.setPaused(row.name, action === "pause");
+    return json(res, { handle: row.name, state: publicState(row) });
+  }
 
   // Visitor agent creation: the one write this surface accepts. Everything a
   // visitor can influence is clamped in visitor-strategy.ts; everything the
@@ -115,8 +275,12 @@ const server = createServer(async (req, res) => {
         address: a.address,
         kind: a.kind,
         symbol: a.strategy.launchNames?.[0]?.symbol ?? null,
-        mission: a.kind === "visitor" ? (store.userAgentByName(a.name)?.mission ?? null) : null,
-        owner: a.kind === "visitor" ? (store.userAgentByName(a.name)?.owner ?? null) : null,
+        approach: a.approach,
+        state: a.kind === "visitor" ? publicState({ state: a.state, name: a.name }) : "running",
+        agentId: a.agentId?.toString() ?? null,
+        mandate: a.mandate,
+        mission: a.mandate,
+        owner: a.owner,
         walletUsdc: await balanceOf(a.address),
         spent24h: store.spentLast24h(a.name).toString(),
         outcomes: Object.fromEntries(outcomes.map((o) => [o.outcome, o.n])),

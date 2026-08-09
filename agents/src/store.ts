@@ -187,6 +187,24 @@ db.exec(`
   if (!cols.has("owner")) {
     db.exec("ALTER TABLE user_agents ADD COLUMN owner TEXT");
   }
+  // Primitive v1: onchain identity, behavioral approach, and a creation state
+  // machine. Rows that predate these read as active scouts with no identity
+  // yet — the activation sweep notices the missing agent_id and repairs them.
+  if (!cols.has("approach")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN approach TEXT NOT NULL DEFAULT 'scout'");
+  }
+  if (!cols.has("state")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN state TEXT NOT NULL DEFAULT 'active'");
+  }
+  if (!cols.has("agent_id")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN agent_id TEXT");
+  }
+  if (!cols.has("identity_tx")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN identity_tx TEXT");
+  }
+  if (!cols.has("handle_tx")) {
+    db.exec("ALTER TABLE user_agents ADD COLUMN handle_tx TEXT");
+  }
 }
 
 db.exec(`
@@ -584,6 +602,11 @@ export interface UserAgentRow {
   mission: string | null;
   grant_usdc: string;
   owner: string | null;
+  approach: string;
+  state: string;
+  agent_id: string | null;
+  identity_tx: string | null;
+  handle_tx: string | null;
   active: number;
   created_at: number;
 }
@@ -595,11 +618,13 @@ export function userAgentCreate(row: {
   strategyJson: string;
   mission: string | null;
   owner: string;
+  approach: string;
+  state: string;
   creatorIp: string | null;
 }): void {
   db.prepare(
-    `INSERT INTO user_agents (name, wallet_id, address, strategy, mission, owner, creator_ip, granted, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    `INSERT INTO user_agents (name, wallet_id, address, strategy, mission, owner, approach, state, creator_ip, granted, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
   ).run(
     row.name,
     row.walletId,
@@ -607,16 +632,47 @@ export function userAgentCreate(row: {
     row.strategyJson,
     row.mission,
     row.owner,
+    row.approach,
+    row.state,
     row.creatorIp,
     Date.now(),
   );
 }
 
-export function userAgentsOwnedBy(owner: string, sinceMs: number): number {
-  const row = db
-    .prepare("SELECT COUNT(*) n FROM user_agents WHERE owner = ? AND created_at > ?")
-    .get(owner.toLowerCase(), Date.now() - sinceMs) as { n: number };
-  return row.n;
+/** One operator wallet, one Smiths agent — this is the lookup that enforces it. */
+export function userAgentByOwner(owner: string): UserAgentRow | undefined {
+  return db.prepare("SELECT * FROM user_agents WHERE owner = ? AND active = 1").get(
+    owner.toLowerCase(),
+  ) as UserAgentRow | undefined;
+}
+
+export function userAgentSetState(name: string, state: string): void {
+  db.prepare("UPDATE user_agents SET state = ? WHERE name = ?").run(state, name);
+}
+
+export function userAgentSetIdentity(name: string, agentId: string, txHash: string | null): void {
+  db.prepare("UPDATE user_agents SET agent_id = ?, identity_tx = COALESCE(?, identity_tx) WHERE name = ?").run(
+    agentId,
+    txHash,
+    name,
+  );
+}
+
+export function userAgentSetHandleTx(name: string, txHash: string | null): void {
+  db.prepare("UPDATE user_agents SET handle_tx = COALESCE(?, handle_tx) WHERE name = ?").run(txHash, name);
+}
+
+export function userAgentSetMandate(name: string, mandate: string | null): void {
+  db.prepare("UPDATE user_agents SET mission = ? WHERE name = ?").run(mandate, name);
+}
+
+/** Agents the activation sweep should look at: not yet active, or active but missing identity. */
+export function userAgentsNeedingActivation(): UserAgentRow[] {
+  return db
+    .prepare(
+      "SELECT * FROM user_agents WHERE active = 1 AND (state != 'active' OR agent_id IS NULL) ORDER BY created_at",
+    )
+    .all() as unknown as UserAgentRow[];
 }
 
 export function userAgentsUngranted(): UserAgentRow[] {

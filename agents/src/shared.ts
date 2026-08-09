@@ -2,6 +2,7 @@ import "dotenv/config";
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
 
 export const IDENTITY_REGISTRY = "0x8004A818BFB912233c491871b3d84c89A494BD9e";
+export const SMITHS_HANDLES = "0x7f27Bba3Fa5A5D338febc396d5a57FE6773d9C68";
 export const MARKETS = required("MARKETS_ADDRESS");
 export const USDC = "0x3600000000000000000000000000000000000000";
 export const RPC = process.env.ARC_TESTNET_RPC_URL ?? "https://rpc.testnet.arc.io";

@@ -103,6 +103,7 @@ export async function runOnce(
       agentName,
       address: agent.address,
       description: agent.description,
+      approach: entry.approach,
       strategy,
       markets,
       recentTrades,

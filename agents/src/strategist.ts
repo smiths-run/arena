@@ -11,14 +11,17 @@
 import type { Strategy } from "./config.ts";
 import { LAUNCH_NAMES } from "./config.ts";
 import type { Action } from "./policy.ts";
+import { APPROACH_WEIGHTS, DEFAULT_MANDATE, type Approach } from "./visitor-strategy.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 
 export interface StrategistInput {
   agentName: string;
   address: `0x${string}`;
-  /** The agent's brief — for visitor agents, the creator's own mission text. */
+  /** The agent's brief — for Smiths agents, the operator's Mandate (or the default). */
   description: string;
+  /** Behavioral preference: what this agent's taste favors, never what it may do. */
+  approach: Approach;
   strategy: Strategy;
   markets: obs.MarketView[];
   recentTrades: obs.TradeView[];
@@ -86,22 +89,51 @@ export const heuristicStrategist: Strategist = async (input) => {
     }
   }
 
-  // 4) Buyers: demand external activity — trades by wallets that are not us, in the
-  //    lookback window — before putting money in. No signal, no trade.
+  // 4) Buyers: demand external activity — trades by wallets that are not us, in
+  //    the lookback window — then rank candidates by the agent's Approach. The
+  //    weights change taste (a Scout favors fresh diversity, Momentum favors
+  //    flow, a Contrarian punishes concentration); the minimum-evidence gate
+  //    and every hard limit stay exactly where they were.
   if (strategy.allowedActions.includes("buy")) {
     const floor = blockNow - strategy.lookbackBlocks;
-    const byMarket = new Map<bigint, number>();
+    const stats = new Map<
+      string,
+      { id: bigint; count: number; traders: Map<string, number>; lastBlock: bigint }
+    >();
     for (const t of recentTrades) {
       if (t.blockNumber < floor) continue;
       if (t.trader.toLowerCase() === me) continue;
-      byMarket.set(t.marketId, (byMarket.get(t.marketId) ?? 0) + 1);
+      const key = t.marketId.toString();
+      const s = stats.get(key) ?? { id: t.marketId, count: 0, traders: new Map(), lastBlock: 0n };
+      s.count += 1;
+      const tr = t.trader.toLowerCase();
+      s.traders.set(tr, (s.traders.get(tr) ?? 0) + 1);
+      if (t.blockNumber > s.lastBlock) s.lastBlock = t.blockNumber;
+      stats.set(key, s);
     }
 
-    let best: { id: bigint; count: number } | null = null;
-    for (const [id, count] of byMarket) {
-      if (strategy.blockedMarkets.includes(id)) continue;
-      if (count < strategy.minExternalTrades) continue;
-      if (!best || count > best.count) best = { id, count };
+    const w = APPROACH_WEIGHTS[input.approach];
+    const tradeCountOf = new Map(markets.map((m) => [m.id.toString(), m.tradeCount]));
+    let best: { id: bigint; score: number; count: number } | null = null;
+    for (const s of stats.values()) {
+      if (strategy.blockedMarkets.includes(s.id)) continue;
+      if (s.count < strategy.minExternalTrades) continue;
+
+      const diversity = s.traders.size;
+      const topShare = Math.max(...s.traders.values()) / s.count;
+      const blocksAgo = Number(blockNow - s.lastBlock);
+      const recency = 1 / (1 + blocksAgo / 300);
+      const lifetime = tradeCountOf.get(s.id.toString()) ?? s.count;
+      const emerging = 1 / (1 + lifetime / 10);
+
+      const score =
+        w.flow * s.count +
+        w.recency * recency +
+        w.diversity * diversity +
+        w.emerging * emerging -
+        w.concentration * topShare;
+
+      if (!best || score > best.score) best = { id: s.id, score, count: s.count };
     }
 
     if (best) {

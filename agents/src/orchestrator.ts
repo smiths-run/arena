@@ -11,7 +11,7 @@ import { runOnce } from "./runtime.ts";
 import { decide } from "./schedule.ts";
 import { heuristicStrategist, type Strategist } from "./strategist.ts";
 import { llmStrategist } from "./llm-strategist.ts";
-import { treasuryGrant } from "./agent-factory.ts";
+import { ensureHandle, ensureIdentity } from "./identity.ts";
 import * as executor from "./executor.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
@@ -50,35 +50,55 @@ for (const name of heldAgents()) {
   console.log(`${name}: held — a Circle transaction is still in flight`);
 }
 
+/** Enough for the 1 USDC launch, the 0.5 reserve and gas — the activation bar. */
+const ACTIVATION_MINIMUM = 2_000_000n;
+
 /**
- * The funding sweep: one ungranted visitor agent per attempt, at most one
- * attempt a minute. An agent that already holds money (funded at creation,
- * or out-of-band) is marked granted without a transfer, so the sweep can
- * never double-fund; an agent the treasury cannot reach yet stays on the
- * list and its runs keep saying, publicly, that it is broke.
+ * The activation sweep: one agent per pass, at most one attempt a minute.
+ * A funded agent gets its ERC-8004 identity and its permanent Smiths handle
+ * — both claimed from its own wallet — and only then joins the run loop,
+ * with its first run scheduled immediately. Each step is idempotent, so a
+ * crash mid-activation resumes instead of duplicating; a handle lost to a
+ * race parks the agent in error_recoverable rather than launching nameless.
  */
-async function fundOneVisitor(): Promise<void> {
-  // Owners fund their own agents now; the treasury sweep is an ops tool for
-  // seeding demos, and stays off unless explicitly switched on.
-  if (process.env.TREASURY_SWEEP !== "1") return;
-  if (!process.env.TREASURY_WALLET_ID) return;
-  const next = store.userAgentsUngranted()[0];
+async function activateOneVisitor(): Promise<void> {
+  const next = store.userAgentsNeedingActivation()[0];
   if (!next) return;
-  const last = Number(store.settingGet("grant_last_attempt") ?? 0);
+  const last = Number(store.settingGet("activation_last_attempt") ?? 0);
   if (Date.now() - last < 60_000) return;
-  store.settingSet("grant_last_attempt", String(Date.now()));
+  store.settingSet("activation_last_attempt", String(Date.now()));
+
   try {
     const balance = await obs.walletUsdc(next.address as `0x${string}`);
-    if (balance >= 2_000_000n) {
-      store.userAgentMarkGranted(next.name);
+    if (balance < ACTIVATION_MINIMUM) {
+      if (next.state !== "awaiting_funding") store.userAgentSetState(next.name, "awaiting_funding");
       return;
     }
-    if (await treasuryGrant(client, next.address, BigInt(next.grant_usdc ?? "3000000"))) {
-      store.userAgentMarkGranted(next.name);
-      console.log(`treasury funded ${next.name}`);
-    }
+    if (next.state !== "activating") store.userAgentSetState(next.name, "activating");
+
+    const agent = {
+      name: next.name,
+      walletId: next.wallet_id,
+      address: next.address as `0x${string}`,
+      description: next.mission ?? "Autonomous Smiths Run market agent on Arc.",
+    };
+
+    const { agentId, txHash } = await ensureIdentity(client, agent, { agentId: next.agent_id });
+    store.userAgentSetIdentity(next.name, agentId.toString(), txHash);
+
+    const claim = await ensureHandle(client, agent, agentId, next.name);
+    store.userAgentSetHandleTx(next.name, claim.txHash);
+
+    store.userAgentSetState(next.name, "active");
+    // Create = the agent begins: the first run does not wait out a cooldown.
+    store.requestRun(next.name);
+    console.log(`activated @${next.name} — identity ${agentId}, handle claimed`);
   } catch (err) {
-    console.log(`treasury grant for ${next.name} failed — ${err instanceof Error ? err.message : err}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`activation of @${next.name} failed — ${msg}`);
+    if (msg.includes("is taken") || msg.includes("already holds handle")) {
+      store.userAgentSetState(next.name, "error_recoverable");
+    }
   }
 }
 
@@ -86,11 +106,13 @@ async function pass(): Promise<void> {
   // The heartbeat is how Mission Control knows this loop is alive; stamped per
   // pass, not per run, so a quiet pass still counts as presence.
   store.heartbeat();
-  await fundOneVisitor();
+  await activateOneVisitor();
   const held = heldAgents();
-  // Re-read the roster every pass: a visitor agent created a second ago is
-  // part of the economy on the next tick, no restart required.
+  // Re-read the roster every pass: an agent activated a second ago is part
+  // of the economy on the next tick, no restart required. Only ACTIVE agents
+  // run — an agent without its identity and handle does not act.
   for (const agent of fullRoster()) {
+    if (agent.state !== "active") continue;
     const isHeld = held.has(agent.name);
     const verdict = decide({
       held: isHeld,

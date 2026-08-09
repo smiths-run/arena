@@ -40,23 +40,6 @@ export interface Trade {
   timestamp: string;
 }
 
-export interface AgentRow {
-  agentId: string;
-  owner: string;
-  uri: string;
-  name: string | null;
-  agentType: string | null;
-  registeredAtBlock: string;
-  registeredAtTx: string;
-  account: {
-    tradeCount: number;
-    buyVolumeUsdc: string;
-    sellVolumeUsdc: string;
-    marketsCreated: number;
-    creatorFeesEarned: string;
-  } | null;
-}
-
 export interface Run {
   id: number;
   agent: string;
@@ -81,6 +64,8 @@ export interface RosterAgent {
   name: string;
   address: string;
   kind: "house" | "visitor";
+  /** ERC-8004 id, once the agent has registered itself on Arc. */
+  agentId: string | null;
   symbol: string | null;
   mission?: string | null;
   owner?: string | null;
@@ -193,7 +178,6 @@ export const api = {
   marketTrades: (id: string) =>
     get<{ trades: Trade[] }>(`${INDEXER}/api/markets/${id}/trades?limit=50`),
   activity: (limit = 40) => get<{ activity: Trade[] }>(`${INDEXER}/api/activity?limit=${limit}`),
-  agents: () => get<{ agents: AgentRow[] }>(`${INDEXER}/api/agents?limit=100`),
   roster: () => get<{ agents: RosterAgent[] }>(`${RECEIPTS}/agents`),
   runs: (limit = 60) => get<{ runs: Run[] }>(`${RECEIPTS}/runs?limit=${limit}`),
   intel: () => get<IntelLedger>(`${RECEIPTS}/intel`),

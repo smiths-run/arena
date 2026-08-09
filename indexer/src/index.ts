@@ -1,5 +1,5 @@
 import { ponder } from "ponder:registry";
-import { account, agent, feeClaim, market, stats, trade } from "ponder:schema";
+import { account, feeClaim, market, stats, trade } from "ponder:schema";
 
 const STATS_ID = 0;
 
@@ -220,63 +220,4 @@ ponder.on("Markets:ProtocolFeesClaimed", async ({ event, context }) => {
   });
 
   await bumpStats(context.db, { protocolFeesClaimed: amount });
-});
-
-// ─────────────────────────────────────────────── ERC-8004 identities
-
-
-/** Parse name/type out of a data:application/json[;base64] URI; anything else is opaque. */
-function parseAgentURI(uri: string): { name: string | null; agentType: string | null } {
-  try {
-    let jsonText: string | null = null;
-    if (uri.startsWith("data:application/json;base64,")) {
-      jsonText = Buffer.from(uri.slice("data:application/json;base64,".length), "base64").toString("utf8");
-    } else if (uri.startsWith("data:application/json,")) {
-      jsonText = decodeURIComponent(uri.slice("data:application/json,".length));
-    }
-    if (jsonText === null) return { name: null, agentType: null };
-    const meta = JSON.parse(jsonText);
-    return {
-      name: typeof meta.name === "string" ? meta.name.slice(0, 64) : null,
-      agentType: typeof meta.agent_type === "string" ? meta.agent_type.slice(0, 64) : null,
-    };
-  } catch {
-    return { name: null, agentType: null };
-  }
-}
-
-ponder.on("IdentityRegistry:Registered", async ({ event, context }) => {
-  const { agentId, agentURI, owner } = event.args;
-  const parsed = parseAgentURI(agentURI);
-
-  await context.db
-    .insert(agent)
-    .values({
-      agentId,
-      owner,
-      uri: agentURI,
-      name: parsed.name,
-      agentType: parsed.agentType,
-      registeredAtBlock: event.block.number,
-      registeredAtTx: event.transaction.hash,
-    })
-    .onConflictDoNothing();
-});
-
-ponder.on("IdentityRegistry:URIUpdated", async ({ event, context }) => {
-  const { agentId, newURI } = event.args;
-  const parsed = parseAgentURI(newURI);
-  await context.db
-    .update(agent, { agentId })
-    .set({ uri: newURI, name: parsed.name, agentType: parsed.agentType });
-});
-
-ponder.on("IdentityRegistry:Transfer", async ({ event, context }) => {
-  const { from, to, tokenId } = event.args;
-  if (from === "0x0000000000000000000000000000000000000000") return; // mint — Registered covers it
-  // Identity NFTs are transferable; keep the owner column truthful if one moves.
-  const row = await context.db.find(agent, { agentId: tokenId });
-  if (row !== null) {
-    await context.db.update(agent, { agentId: tokenId }).set({ owner: to });
-  }
 });

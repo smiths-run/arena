@@ -1,52 +1,66 @@
 "use client";
 
 /**
- * Deploy an agent in three honest steps: connect (the wallet is your
- * profile), sign & create (one signature proves the agent is yours), fund
- * (USDC moves from your wallet to its wallet — the arena grants nothing).
- * Trading stays agent-only; your wallet deploys and feeds, never places
- * orders.
+ * Create your agent: handle, approach, mandate, starting capital, risk.
+ * Connect → sign → fund → it activates itself and begins. The handle is
+ * permanent and unique on Smiths — checked live here, enforced onchain.
  */
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { Address } from "viem";
 import { connectWallet, sendUsdc, signMessage, balanceOf } from "@/lib/wallet";
-import { short, usdc as fmtUsdc } from "@/lib/api";
+import { short, usdc as fmtUsdc, type HandleCheck } from "@/lib/api";
 
-const RISKS = [
-  {
-    id: "cautious",
-    label: "Cautious",
-    blurb: "Small positions, quick profit-taking, tight stop. Needs real flow before it buys.",
-  },
-  {
-    id: "balanced",
-    label: "Balanced",
-    blurb: "The house trader's defaults: 1 USDC positions, 5% take-profit, 15% stop.",
-  },
-  {
-    id: "bold",
-    label: "Bold",
-    blurb: "Bigger positions, wider stop, rides winners longer. Still capped at 2 USDC a trade.",
-  },
+const APPROACHES = [
+  { id: "scout", label: "Scout", blurb: "Finds emerging markets early; wants fresh, independent participants before committing." },
+  { id: "momentum", label: "Momentum", blurb: "Follows active flow; joins traction, exits what goes stale." },
+  { id: "contrarian", label: "Contrarian", blurb: "Distrusts crowds and concentration; skipping a crowded market is a win." },
+  { id: "builder", label: "Builder", blurb: "Develops its own market; treats creator fees as income." },
 ] as const;
 
-type Created = { name: string; symbol: string; address: string; owner: string };
+const RISKS = [
+  { id: "low", label: "Low", blurb: "0.5 USDC positions, quick profits, tight stop." },
+  { id: "balanced", label: "Balanced", blurb: "1 USDC positions, 5% take-profit, 15% stop." },
+  { id: "high", label: "High", blurb: "2 USDC positions, wider stop, rides winners." },
+] as const;
+
+type Created = { handle: string; symbol: string; agentWallet: string; state: string };
 
 export function CreateAgent() {
+  const router = useRouter();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const hasWallet = mounted && Boolean((window as any).ethereum);
 
   const [account, setAccount] = useState<Address | null>(null);
   const [myBalance, setMyBalance] = useState<bigint | null>(null);
-  const [name, setName] = useState("");
+  const [handle, setHandle] = useState("");
+  const [check, setCheck] = useState<HandleCheck | null>(null);
+  const [approach, setApproach] = useState<string>("scout");
   const [risk, setRisk] = useState<string>("balanced");
-  const [mission, setMission] = useState("");
+  const [mandate, setMandate] = useState("");
+  const [capital, setCapital] = useState("5");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<Created | null>(null);
-  const [fundedTx, setFundedTx] = useState<string | null>(null);
+  const [funded, setFunded] = useState(false);
+
+  const normalized = handle.trim().toLowerCase().replace(/^@/, "");
+
+  // Live availability, debounced; the contract has the final word at claim time.
+  useEffect(() => {
+    setCheck(null);
+    if (normalized.length < 3) return;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/runs/handles/${encodeURIComponent(normalized)}`, { cache: "no-store" });
+        setCheck((await res.json()) as HandleCheck);
+      } catch {
+        setCheck(null);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [normalized]);
 
   const connect = async () => {
     setError(null);
@@ -55,6 +69,10 @@ export function CreateAgent() {
       const addr = await connectWallet();
       setAccount(addr);
       setMyBalance(await balanceOf(addr).catch(() => null));
+      // One operator, one agent: if this wallet already runs one, go watch it.
+      const res = await fetch(`/api/runs/agent/status?owner=${addr}`, { cache: "no-store" });
+      const body = await res.json();
+      if (body.exists) router.push("/run");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -66,17 +84,17 @@ export function CreateAgent() {
     if (!account) return;
     setError(null);
     try {
-      const clean = name.trim().toLowerCase();
       setBusy("waiting for your signature…");
-      const signature = await signMessage(account, `Smiths Run: create agent "${clean}"`);
+      const signature = await signMessage(account, `Smiths Run: create agent "${normalized}"`);
       setBusy("creating its wallet…");
       const res = await fetch("/api/runs/agents/create", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          name: clean,
+          handle: normalized,
+          approach,
           risk,
-          mission: mission.trim() || undefined,
+          mandate: mandate.trim() || undefined,
           owner: account,
           signature,
         }),
@@ -91,159 +109,46 @@ export function CreateAgent() {
     }
   };
 
-  const [fundAmount, setFundAmount] = useState("5");
-  const fundParsed = /^\d+(\.\d{1,6})?$/.test(fundAmount.trim()) ? Number(fundAmount.trim()) : NaN;
-  const fundValid = Number.isFinite(fundParsed) && fundParsed > 0;
-
   const fund = async () => {
-    if (!account || !created || !fundValid) return;
+    if (!account || !created) return;
+    if (!/^\d+(\.\d{1,6})?$/.test(capital.trim()) || Number(capital) <= 0) {
+      setError("enter a valid amount");
+      return;
+    }
     setError(null);
-    setBusy(`sending ${fundAmount.trim()} USDC…`);
+    setBusy(`sending ${capital.trim()} USDC…`);
     try {
-      const tx = await sendUsdc(account, created.address as Address, fundAmount.trim());
-      setFundedTx(tx);
-      setMyBalance(await balanceOf(account).catch(() => null));
+      await sendUsdc(account, created.agentWallet as Address, capital.trim());
+      setFunded(true);
+      setBusy(null);
+      setTimeout(() => router.push("/run"), 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
       setBusy(null);
     }
   };
-
-  const symbolPreview = name.trim().toLowerCase().replace(/[^a-z0-9]/g, "").toUpperCase().slice(0, 8);
 
   if (!hasWallet) {
     return (
       <div className="card trade">
         <p className="dim" style={{ margin: 0 }}>
-          Deploying an agent needs a browser wallet (MetaMask or Rabby) — the wallet is your
-          profile: it owns the agent and funds it. Install one, get test USDC from{" "}
+          Creating an agent needs a browser wallet (MetaMask or Rabby) — it signs your agent into
+          existence, owns it, and funds it with your own USDC. Install one, get test USDC from{" "}
           <a href="https://faucet.circle.com" target="_blank" rel="noreferrer">
             Circle&apos;s faucet
           </a>{" "}
-          (pick Arc Testnet, paste your own address), then refresh this page.
+          (Arc Testnet, your own address), then refresh.
         </p>
       </div>
     );
   }
 
-  // Step 3 — fund it from the owner's wallet.
-  if (created) {
-    return (
-      <div className="card trade">
-        <h2 style={{ margin: 0 }}>
-          {created.name} is yours{fundedTx ? " — and funded." : "."}
-        </h2>
-        <p className="dim" style={{ margin: 0 }}>
-          Owned by <span className="mono">{short(created.owner)}</span> · its wallet:{" "}
-          <span className="mono">{created.address}</span>
-        </p>
-
-        {!fundedTx ? (
-          <>
-            <p className="dim" style={{ margin: 0 }}>
-              Now give it a budget — <strong>from your wallet</strong>. It cannot act on an empty
-              one: its first launch alone costs 1 USDC plus a 0.5 USDC reserve it never spends.
-              {myBalance !== null && (
-                <>
-                  {" "}
-                  You hold <span className="mono">{fmtUsdc(myBalance / 10n ** 12n)} USDC</span>
-                  {myBalance < 3n * 10n ** 18n && (
-                    <>
-                      {" "}
-                      — top up first at{" "}
-                      <a href="https://faucet.circle.com" target="_blank" rel="noreferrer">
-                        the faucet
-                      </a>
-                    </>
-                  )}
-                  .
-                </>
-              )}
-            </p>
-            <div className="trade-row">
-              <input
-                className="trade-input"
-                value={fundAmount}
-                onChange={(e) => setFundAmount(e.target.value)}
-                inputMode="decimal"
-                placeholder="amount"
-                disabled={busy !== null}
-              />
-              <span className="dim">USDC</span>
-              {[3, 5, 10].map((g) => (
-                <button
-                  key={g}
-                  className="btn tab"
-                  onClick={() => setFundAmount(String(g))}
-                  disabled={busy !== null}
-                  type="button"
-                >
-                  {g}
-                </button>
-              ))}
-              <button
-                className="btn primary"
-                onClick={fund}
-                disabled={busy !== null || !fundValid}
-              >
-                {busy ?? (fundValid ? `Send ${fundAmount.trim()} USDC` : "Send")}
-              </button>
-            </div>
-            <p className="dim" style={{ margin: 0, fontSize: 12.5 }}>
-              Any amount is yours to pick — below ~1.6 USDC it cannot afford its first launch and
-              will say so in its receipts. Or fund it later: send USDC to its address from any
-              wallet, and it joins the arena the moment it can afford to.
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="trade-status ok">
-              Funded — tx{" "}
-              <a
-                className="mono"
-                href={`https://testnet.arcscan.app/tx/${fundedTx}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {short(fundedTx)}
-              </a>
-            </p>
-            <ol className="dim" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.9 }}>
-              <li>
-                First run within ~3 minutes: it launches its token,{" "}
-                <span className="mono">{created.symbol}</span>, with 1 USDC on the curve.
-              </li>
-              <li>Then it trades on its own judgment{mission.trim() ? " — guided by your mission" : ""}.</li>
-              <li>
-                Every decision lands signed on <Link href="/agents">the roster</Link> and{" "}
-                <Link href="/receipts">Receipts</Link>.
-              </li>
-            </ol>
-            <div className="trade-row">
-              <Link className="btn primary" href="/agents">
-                Watch it on the roster
-              </Link>
-              <Link className="btn" href="/receipts">
-                Its receipts
-              </Link>
-            </div>
-          </>
-        )}
-        {error && <p className="trade-status err">{error}</p>}
-      </div>
-    );
-  }
-
-  // Step 1 — connect.
   if (!account) {
     return (
       <div className="card trade">
         <div className="trade-row">
           <p className="dim" style={{ margin: 0 }}>
-            Your wallet is your profile here: it signs the agent into existence, owns it on the
-            roster, and funds it with your own USDC. Trading stays agent-only — you deploy, it
-            trades.
+            Your wallet is your identity here: one wallet, one agent, permanently named.
           </p>
           <button className="btn primary" onClick={connect} disabled={busy !== null}>
             {busy ?? "Connect wallet"}
@@ -254,65 +159,151 @@ export function CreateAgent() {
     );
   }
 
-  // Step 2 — describe and sign.
+  if (created) {
+    return (
+      <div className="card trade">
+        <h2 style={{ margin: 0 }}>
+          @{created.handle} is yours{funded ? " — and funded." : "."}
+        </h2>
+        <p className="dim" style={{ margin: 0 }}>
+          Permanent and unique on Smiths. Its wallet:{" "}
+          <span className="mono">{created.agentWallet}</span>
+        </p>
+        {!funded ? (
+          <>
+            <p className="dim" style={{ margin: 0 }}>
+              Give it its starting capital — from your wallet. It activates itself the moment it
+              holds at least 2 USDC: registers on Arc, secures @{created.handle}, then launches{" "}
+              <span className="mono">{created.symbol}</span> and starts working.
+            </p>
+            <div className="trade-row">
+              <input
+                className="trade-input"
+                value={capital}
+                onChange={(e) => setCapital(e.target.value)}
+                inputMode="decimal"
+                disabled={busy !== null}
+              />
+              <span className="dim">USDC</span>
+              {[3, 5, 10].map((g) => (
+                <button key={g} className="btn tab" onClick={() => setCapital(String(g))} disabled={busy !== null}>
+                  {g}
+                </button>
+              ))}
+              <button className="btn primary" onClick={fund} disabled={busy !== null}>
+                {busy ?? `Send ${capital.trim()} USDC`}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="trade-status ok">Capital sent — taking you to Run…</p>
+        )}
+        {error && <p className="trade-status err">{error}</p>}
+      </div>
+    );
+  }
+
+  const availability =
+    normalized.length < 3
+      ? null
+      : check === null
+        ? "Checking…"
+        : check.reserved
+          ? "Reserved"
+          : !check.valid
+            ? "Invalid"
+            : check.available
+              ? "Available ✓"
+              : "Taken";
+
   return (
     <div className="card trade">
       <div className="trade-row dim mono" style={{ fontSize: 13 }}>
-        <span>owner: {short(account)}</span>
+        <span>operator: {short(account)}</span>
         {myBalance !== null && <span>{fmtUsdc(myBalance / 10n ** 12n)} USDC in your wallet</span>}
       </div>
 
-      <div className="trade-row">
-        <input
-          className="trade-input"
-          style={{ width: 220, fontFamily: "inherit" }}
-          placeholder="agent name (e.g. piston)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={16}
-          disabled={busy !== null}
-        />
-        <span className="dim">
-          {symbolPreview.length >= 2 ? (
-            <>
-              its token will be <span className="mono">{symbolPreview}</span>
-            </>
-          ) : (
-            "3–16 chars; its name becomes its token"
-          )}
-        </span>
-      </div>
-
-      <div className="risk-grid">
-        {RISKS.map((r) => (
-          <button
-            key={r.id}
-            className={`risk-card ${risk === r.id ? "active" : ""}`}
-            onClick={() => setRisk(r.id)}
+      <div>
+        <div className="field-label">HANDLE</div>
+        <div className="trade-row">
+          <span className="dim" style={{ fontSize: 18 }}>@</span>
+          <input
+            className="trade-input"
+            style={{ width: 220 }}
+            placeholder="test1"
+            value={handle}
+            onChange={(e) => setHandle(e.target.value)}
+            maxLength={16}
             disabled={busy !== null}
-            type="button"
-          >
-            <div className="risk-title">{r.label}</div>
-            <div className="dim" style={{ fontSize: 13 }}>{r.blurb}</div>
-          </button>
-        ))}
+          />
+          {availability && (
+            <span className={availability === "Available ✓" ? "pos" : availability === "Checking…" ? "dim" : "neg"}>
+              {availability}
+            </span>
+          )}
+        </div>
+        <div className="dim" style={{ fontSize: 12.5, marginTop: 4 }}>
+          Permanent and unique on Smiths. Its token will be{" "}
+          <span className="mono">
+            {normalized.replace(/[^a-z0-9]/g, "").toUpperCase().slice(0, 8) || "—"}
+          </span>
+          .
+        </div>
       </div>
 
       <div>
+        <div className="field-label">APPROACH</div>
+        <div className="risk-grid">
+          {APPROACHES.map((a) => (
+            <button
+              key={a.id}
+              className={`risk-card ${approach === a.id ? "active" : ""}`}
+              onClick={() => setApproach(a.id)}
+              disabled={busy !== null}
+              type="button"
+            >
+              <div className="risk-title">{a.label}</div>
+              <div className="dim" style={{ fontSize: 13 }}>{a.blurb}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div className="field-label">
+          MANDATE <span className="dim" style={{ fontWeight: 400 }}>optional</span>
+        </div>
         <textarea
           className="trade-input"
-          style={{ width: "100%", minHeight: 72, fontFamily: "inherit", resize: "vertical" }}
-          placeholder={`mission (optional) — how should it behave? e.g. "Be patient. Only buy markets with real outside flow, take profit early, and never chase a pump."`}
-          value={mission}
-          onChange={(e) => setMission(e.target.value)}
+          style={{ width: "100%", minHeight: 68, resize: "vertical" }}
+          placeholder="Find emerging markets. Avoid crowded entries. Take profits instead of holding forever."
+          value={mandate}
+          onChange={(e) => setMandate(e.target.value)}
           maxLength={280}
           disabled={busy !== null}
         />
         <div className="dim" style={{ fontSize: 12.5, marginTop: 4 }}>
-          With a mission, your agent <strong>thinks with Claude</strong> on every run and its
-          reasoning lands in the receipts (capped at 30 thoughts a day). Without one it runs on
-          plain rules. Either way the risk limits above bind — a mission can want things; it
-          cannot spend past the policy engine. {mission.length > 0 && `${mission.length}/280`}
+          Your agent thinks with Claude either way; the Mandate sets its objective in your words.
+          It can shape what the agent wants — never what it may spend: the risk limits below and
+          the policy engine always bind. {mandate.length > 0 && `${mandate.length}/280`}
+        </div>
+      </div>
+
+      <div>
+        <div className="field-label">RISK</div>
+        <div className="risk-grid">
+          {RISKS.map((r) => (
+            <button
+              key={r.id}
+              className={`risk-card ${risk === r.id ? "active" : ""}`}
+              onClick={() => setRisk(r.id)}
+              disabled={busy !== null}
+              type="button"
+            >
+              <div className="risk-title">{r.label}</div>
+              <div className="dim" style={{ fontSize: 13 }}>{r.blurb}</div>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -320,13 +311,13 @@ export function CreateAgent() {
         <button
           className="btn primary"
           onClick={create}
-          disabled={busy !== null || name.trim().length < 3}
+          disabled={busy !== null || normalized.length < 3 || (check !== null && !(check.valid && check.available))}
         >
-          {busy ?? "Sign & create"}
+          {busy ?? "Create agent"}
         </button>
         <span className="dim" style={{ fontSize: 13 }}>
-          One signature (free, no transaction) registers you as its owner. Funding comes next,
-          from your wallet.
+          One free signature registers you as its operator. Starting capital comes next, from
+          your wallet.
         </span>
       </div>
 

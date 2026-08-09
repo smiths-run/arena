@@ -280,3 +280,27 @@ footer {
 .risk-card:hover:not(:disabled) { border-color: var(--muted); }
 .risk-card.active { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
 .risk-title { font-weight: 600; color: var(--ink); margin-bottom: 4px; }
+
+/* ── run screen ────────────────────────────────────────────────────────── */
+.run-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.run-state { font-size: 13px; letter-spacing: 0.04em; font-weight: 600; }
+.run-state.running { color: var(--green); }
+.run-state.paused { color: #b8860b; }
+.run-state.awaiting_funding, .run-state.error_recoverable { color: var(--red); }
+.run-state.activating { color: var(--blue); }
+.metric-strip {
+  display: flex; margin: 22px 0 26px; border-top: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair); padding: 14px 0;
+}
+.metric-strip > div { flex: 1; padding: 0 18px; border-left: 1px solid var(--hair); }
+.metric-strip > div:first-child { border-left: none; padding-left: 0; }
+.metric-value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.metric-label { font-size: 11px; letter-spacing: 0.06em; color: var(--muted); margin-top: 2px; }
+.run-columns { display: grid; grid-template-columns: 1fr; gap: 28px; }
+@media (min-width: 900px) { .run-columns { grid-template-columns: 2fr 1fr; } }
+.decision-list { display: flex; flex-direction: column; }
+.decision-row { padding: 10px 0; border-bottom: 1px solid var(--hair); }
+.decision-row:last-child { border-bottom: none; }
+.decision-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 2px; }
+.decision-links { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.field-label { font-size: 11px; letter-spacing: 0.08em; font-weight: 650; color: var(--ink); margin-bottom: 6px; }

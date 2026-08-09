@@ -133,6 +133,48 @@ export interface IntelLedger {
   };
 }
 
+export interface RunOverview {
+  exists: boolean;
+  agent?: {
+    handle: string;
+    agentId: string | null;
+    wallet: string;
+    approach: string;
+    risk: string;
+    mandate: string | null;
+    state: string;
+    identityTx: string | null;
+    handleTx: string | null;
+  };
+  economics?: {
+    equity: string | null;
+    cash: string | null;
+    netResult: string;
+    positionCount: number;
+    claimableFees: string | null;
+  };
+  positions?: Array<{ marketId: string; tokens: string; costUsdc: string; valueUsdc: string | null }>;
+  recentDecisions?: Array<{
+    id: number;
+    at: number;
+    outcome: string | null;
+    action: string | null;
+    marketId: string | null;
+    usdc: string | null;
+    reason: string;
+    txHash: string | null;
+    signed: boolean;
+    netResult: string | null;
+  }>;
+}
+
+export interface HandleCheck {
+  handle: string;
+  valid: boolean;
+  available: boolean;
+  reserved: boolean;
+}
+
 export const api = {
   stats: () => get<Stats>(`${INDEXER}/api/stats`),
   markets: () => get<{ markets: Market[] }>(`${INDEXER}/api/markets`),

@@ -1,0 +1,323 @@
+"use client";
+
+/**
+ * The single-agent control surface. One operator, one agent, one screen that
+ * answers: what is my agent doing, what does it control, is it making or
+ * losing money, what is it holding, and why did it act or refuse?
+ *
+ * The operator can pause, resume and add capital. They cannot trade — the
+ * agent does that part.
+ */
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import type { Address } from "viem";
+import { connectWallet, sendUsdc, signMessage } from "@/lib/wallet";
+import { short, signedUsdc, usdc as fmtUsdc, EXPLORER, type RunOverview } from "@/lib/api";
+
+const APPROACH_LABEL: Record<string, string> = {
+  scout: "Scout",
+  momentum: "Momentum",
+  contrarian: "Contrarian",
+  builder: "Builder",
+};
+const RISK_LABEL: Record<string, string> = { low: "Low", balanced: "Balanced", high: "High" };
+const STATE_LABEL: Record<string, string> = {
+  running: "RUNNING",
+  paused: "PAUSED",
+  awaiting_funding: "WAITING FOR CAPITAL",
+  activating: "ACTIVATING",
+  error_recoverable: "NEEDS ATTENTION",
+};
+
+function pct(cost: string, value: string | null): string {
+  const c = Number(cost);
+  const v = value === null ? NaN : Number(value);
+  if (!c || !Number.isFinite(v)) return "—";
+  const p = ((v - c) / c) * 100;
+  return `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
+}
+
+export function RunScreen() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const hasWallet = mounted && Boolean((window as any).ethereum);
+
+  const [account, setAccount] = useState<Address | null>(null);
+  const [data, setData] = useState<RunOverview | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [fundAmount, setFundAmount] = useState("5");
+  const [showFund, setShowFund] = useState(false);
+
+  const refresh = useCallback(async (owner: Address) => {
+    try {
+      const res = await fetch(`/api/runs/run/overview?owner=${owner}`, { cache: "no-store" });
+      setData((await res.json()) as RunOverview);
+    } catch {
+      /* keep the last snapshot */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!account) return;
+    refresh(account);
+    const t = setInterval(() => refresh(account), 5000);
+    return () => clearInterval(t);
+  }, [account, refresh]);
+
+  const connect = async () => {
+    setError(null);
+    setBusy("connecting…");
+    try {
+      setAccount(await connectWallet());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const control = async (action: "pause" | "resume") => {
+    if (!account || !data?.agent) return;
+    setError(null);
+    setBusy(`${action}…`);
+    try {
+      const ts = Date.now();
+      const signature = await signMessage(account, `Smiths Run: ${action} @${data.agent.handle} ${ts}`);
+      const res = await fetch(`/api/runs/agent/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ owner: account, signature, ts }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? `${action} failed`);
+      await refresh(account);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const fund = async () => {
+    if (!account || !data?.agent) return;
+    if (!/^\d+(\.\d{1,6})?$/.test(fundAmount.trim()) || Number(fundAmount) <= 0) return;
+    setError(null);
+    setBusy(`sending ${fundAmount} USDC…`);
+    try {
+      await sendUsdc(account, data.agent.wallet as Address, fundAmount.trim());
+      setShowFund(false);
+      await refresh(account);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!hasWallet) {
+    return (
+      <div className="card trade">
+        <p className="dim" style={{ margin: 0 }}>
+          Run is your agent&apos;s control surface. It needs a browser wallet (MetaMask or Rabby)
+          to know which agent is yours — install one and refresh.
+        </p>
+      </div>
+    );
+  }
+
+  if (!account) {
+    return (
+      <div className="card trade">
+        <div className="trade-row">
+          <p className="dim" style={{ margin: 0 }}>
+            Connect the wallet that operates your agent.
+          </p>
+          <button className="btn primary" onClick={connect} disabled={busy !== null}>
+            {busy ?? "Connect wallet"}
+          </button>
+        </div>
+        {error && <p className="trade-status err">{error}</p>}
+      </div>
+    );
+  }
+
+  if (data && !data.exists) {
+    return (
+      <div className="card trade">
+        <p className="dim" style={{ margin: 0 }}>
+          This wallet doesn&apos;t operate an agent yet.
+        </p>
+        <div className="trade-row">
+          <Link className="btn primary" href="/create">
+            Create your agent
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data?.agent || !data.economics) {
+    return <p className="dim">Loading your agent…</p>;
+  }
+
+  const a = data.agent;
+  const e = data.economics;
+  const state = STATE_LABEL[a.state] ?? a.state.toUpperCase();
+
+  return (
+    <>
+      <div className="run-header">
+        <div>
+          <h1 style={{ marginBottom: 2 }}>@{a.handle}</h1>
+          <div className="dim">
+            {APPROACH_LABEL[a.approach] ?? a.approach} · Risk {RISK_LABEL[a.risk] ?? a.risk}
+            {a.agentId && (
+              <>
+                {" "}
+                · <span className="mono">ERC-8004 #{a.agentId}</span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="trade-row">
+          <span className={`run-state ${a.state}`}>● {state}</span>
+          {a.state === "running" && (
+            <button className="btn" onClick={() => control("pause")} disabled={busy !== null}>
+              Pause
+            </button>
+          )}
+          {a.state === "paused" && (
+            <button className="btn" onClick={() => control("resume")} disabled={busy !== null}>
+              Resume
+            </button>
+          )}
+          <button className="btn primary" onClick={() => setShowFund(!showFund)} disabled={busy !== null}>
+            + Add USDC
+          </button>
+        </div>
+      </div>
+
+      {a.state === "awaiting_funding" && (
+        <p className="trade-status err" style={{ marginTop: 8 }}>
+          @{a.handle} is waiting for capital — it needs at least 2 USDC to activate.
+        </p>
+      )}
+      {a.state === "activating" && (
+        <p className="dim" style={{ marginTop: 8 }}>
+          Registering @{a.handle} on Arc and securing its handle…
+        </p>
+      )}
+
+      {showFund && (
+        <div className="card trade" style={{ marginTop: 12 }}>
+          <div className="trade-row">
+            <input
+              className="trade-input"
+              value={fundAmount}
+              onChange={(ev) => setFundAmount(ev.target.value)}
+              inputMode="decimal"
+              disabled={busy !== null}
+            />
+            <span className="dim">USDC</span>
+            {[3, 5, 10].map((g) => (
+              <button key={g} className="btn tab" onClick={() => setFundAmount(String(g))} disabled={busy !== null}>
+                {g}
+              </button>
+            ))}
+            <button className="btn primary" onClick={fund} disabled={busy !== null}>
+              {busy ?? "Send from my wallet"}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="trade-status err">{error}</p>}
+
+      <div className="metric-strip">
+        <div>
+          <div className="metric-value">{e.equity ? fmtUsdc(e.equity) : "…"}</div>
+          <div className="metric-label">EQUITY (USDC)</div>
+        </div>
+        <div>
+          <div className={`metric-value ${BigInt(e.netResult) > 0n ? "pos" : BigInt(e.netResult) < 0n ? "neg" : ""}`}>
+            {signedUsdc(e.netResult)}
+          </div>
+          <div className="metric-label">NET RESULT</div>
+        </div>
+        <div>
+          <div className="metric-value">{e.cash ? fmtUsdc(e.cash) : "…"}</div>
+          <div className="metric-label">CASH</div>
+        </div>
+        <div>
+          <div className="metric-value">{e.positionCount}</div>
+          <div className="metric-label">POSITIONS</div>
+        </div>
+      </div>
+
+      <div className="run-columns">
+        <section style={{ marginTop: 0 }}>
+          <h2>Recent decisions</h2>
+          <div className="decision-list">
+            {(data.recentDecisions ?? []).length === 0 && (
+              <p className="dim">Nothing yet — the first run lands within about three minutes.</p>
+            )}
+            {(data.recentDecisions ?? []).map((d) => (
+              <div key={d.id} className="decision-row">
+                <div className="decision-head">
+                  <span className={`badge ${d.outcome === "acted" ? "buy" : d.outcome === "error" ? "sell" : ""}`}>
+                    {(d.action ?? d.outcome ?? "run").toUpperCase()}
+                  </span>
+                  {d.marketId !== null && <span className="mono dim">market {d.marketId}</span>}
+                  {d.usdc && <span className="mono">{fmtUsdc(d.usdc)} USDC</span>}
+                  {d.netResult !== null && (
+                    <span className={`mono ${BigInt(d.netResult) > 0n ? "pos" : BigInt(d.netResult) < 0n ? "neg" : "dim"}`}>
+                      {signedUsdc(d.netResult)}
+                    </span>
+                  )}
+                </div>
+                <div className="dim" style={{ fontSize: 13.5 }}>{d.reason}</div>
+                <div className="decision-links mono">
+                  {d.signed && <span title="signed by the agent's wallet">receipt ✓</span>}
+                  {d.txHash && (
+                    <a href={`${EXPLORER}/tx/${d.txHash}`} target="_blank" rel="noreferrer">
+                      tx {short(d.txHash)}
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="dim" style={{ fontSize: 13 }}>
+            Full history on <Link href="/receipts">Receipts</Link>.
+          </p>
+        </section>
+
+        <aside>
+          <h2>Positions</h2>
+          {(data.positions ?? []).length === 0 ? (
+            <p className="dim">None yet.</p>
+          ) : (
+            <div className="decision-list">
+              {(data.positions ?? []).map((p) => (
+                <Link key={p.marketId} href={`/markets/${p.marketId}`} className="decision-row" style={{ display: "block" }}>
+                  <div className="decision-head">
+                    <span className="mono">market {p.marketId}</span>
+                    <span className="mono">{p.valueUsdc ? `${fmtUsdc(p.valueUsdc)} USDC` : "…"}</span>
+                    <span className={`mono ${pct(p.costUsdc, p.valueUsdc).startsWith("+") ? "pos" : "neg"}`}>
+                      {pct(p.costUsdc, p.valueUsdc)}
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          <h2 style={{ marginTop: 24 }}>Mandate</h2>
+          <p className="dim" style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>
+            {a.mandate ?? "No custom Mandate — running on the default."}
+          </p>
+        </aside>
+      </div>
+    </>
+  );
+}

@@ -166,6 +166,19 @@ export async function fetchMarkets(): Promise<MarketView[]> {
       known.set(key, { id, token, creator, symbol });
       reserves.set(key, reserveUsdc);
     }
+
+    // A symbol read that lost to a rate limit must not become permanent: the
+    // market is fixed, our knowledge of it is not. EMBER shipped nameless
+    // exactly this way. Retry the blanks — the rest of the row stays usable
+    // meanwhile.
+    for (const m of known.values()) {
+      if (m.symbol) continue;
+      const symbol = (await pub
+        .readContract({ address: m.token, abi: chainAbi, functionName: "symbol" })
+        .catch(() => "")) as string;
+      if (symbol) known.set(m.id.toString(), { ...m, symbol });
+    }
+
     checkedAt = Date.now();
   }
 

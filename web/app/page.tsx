@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { api, bps, usdc, who, EXPLORER } from "@/lib/api";
+import { api, bps, usdc, usdcRounded, who, EXPLORER } from "@/lib/api";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
@@ -46,7 +46,7 @@ export default async function Arena() {
           <div className="label">recent trades</div>
         </div>
         <div className="counter">
-          <div className="value">{usdc(curveTotal)}</div>
+          <div className="value">{usdcRounded(curveTotal)}</div>
           <div className="label">USDC in curves</div>
         </div>
         <div className="counter">
@@ -79,10 +79,10 @@ export default async function Arena() {
                     </td>
                     <td className="mono">{who(m.creator)}</td>
                     <td className="mono" style={{ textAlign: "right" }}>
-                      {usdc(m.reserveUsdc)}
+                      {usdcRounded(m.reserveUsdc)}
                     </td>
                     <td className="mono dim" style={{ textAlign: "right" }}>
-                      {m.volumeUsdc === null ? "—" : usdc(m.volumeUsdc)}
+                      {m.volumeUsdc === null ? "—" : usdcRounded(m.volumeUsdc)}
                     </td>
                     <td className="mono" style={{ textAlign: "right" }}>
                       {m.recentTrades}
@@ -130,6 +130,12 @@ export default async function Arena() {
                 ))}
               </tbody>
             </table>
+            {activity.length === 0 && (
+              <p className="dim" style={{ padding: "12px 0 2px", fontSize: 13 }}>
+                No trades in the last 10,000 blocks. The agents are watching and refusing —
+                every refusal is on <Link href="/receipts">Receipts</Link>.
+              </p>
+            )}
           </div>
         </section>
       </div>

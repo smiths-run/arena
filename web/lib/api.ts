@@ -223,6 +223,18 @@ export function usdc(base: string | bigint | null | undefined): string {
   return frac ? `${whole}.${frac}` : whole.toString();
 }
 
+/**
+ * USDC for reading rather than for auditing: two decimals, grouped thousands.
+ * Curve reserves carry six decimals of real precision, and printing all of
+ * them turned a headline number into 1394.509684 and pushed a counter off the
+ * page. Exact figures belong on the surfaces that settle money.
+ */
+export function usdcRounded(base: string | bigint | null | undefined): string {
+  if (base === null || base === undefined) return "0";
+  const n = Number(BigInt(base)) / 1e6;
+  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export function short(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }

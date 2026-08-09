@@ -89,6 +89,14 @@ export interface TradeView {
 /** Token symbols never change, so one read per token lasts the process. */
 const symbolCache = new Map<string, string>();
 
+/**
+ * The market list changes only when someone launches, and every agent in this
+ * process asks for it on every run. Without a cache that is a dozen chain reads
+ * per agent per run, which is how the public endpoints start refusing us.
+ */
+const MARKETS_TTL_MS = 20_000;
+let marketsCache: { at: number; markets: MarketView[] } | null = null;
+
 async function symbolOf(token: `0x${string}`): Promise<string> {
   const hit = symbolCache.get(token.toLowerCase());
   if (hit) return hit;
@@ -110,6 +118,8 @@ async function symbolOf(token: `0x${string}`): Promise<string> {
  * nothing to trade.
  */
 export async function fetchMarkets(): Promise<MarketView[]> {
+  if (marketsCache && Date.now() - marketsCache.at < MARKETS_TTL_MS) return marketsCache.markets;
+
   const count = (await pub.readContract({
     address: MARKETS as `0x${string}`,
     abi: chainAbi,
@@ -135,11 +145,16 @@ export async function fetchMarkets(): Promise<MarketView[]> {
       tradeCount: null,
     });
   }
+  marketsCache = { at: Date.now(), markets };
   return markets;
 }
 
-/** How far back "recent" reaches. One getLogs call covers the whole window. */
-const FLOW_WINDOW_BLOCKS = 10_000n;
+/**
+ * How far back "recent" reaches. Arc's public endpoints cap eth_getLogs at a
+ * 10,000-block range and count both ends, so the window is one short of the cap
+ * — asking for exactly 10,000 back makes it 10,001 blocks and is refused.
+ */
+const FLOW_WINDOW_BLOCKS = 9_999n;
 
 /**
  * Recent buys and sells, read from the chain's own logs rather than the

@@ -1,26 +1,35 @@
-/* Smiths Run — the deck's editorial language, carried to the product.
-   Bone ground, ink text, one blue. Quiet surfaces, hairline borders,
-   everything numeric tabular, every interaction eased. */
+/* Smiths Run — the mark's language, carried to the product.
+   Black ground, silver text, one acid green. Grain over everything, the way
+   the logo has it. Colour is scarce on purpose: when a single hue is the only
+   one on the page, it can carry meaning by itself. */
 
 :root {
-  --bg: #f7f4ec;
-  --ink: #14181f;
-  --body: #3a3f47;
-  --muted: #6f7278;
-  --faint: #9a9c9f;
-  --hair: #e2ddd0;
-  --hair-soft: #ece8dc;
-  --card: #fffefb;
-  --blue: #2b56d9;
-  --blue-ink: #1d3ea6;
-  --blue-wash: #eef1fc;
-  --green: #178f69;
-  --green-wash: #e6f3ed;
-  --red: #c9524e;
-  --red-wash: #fbecea;
-  --amber: #a87b0f;
+  --bg: #08090a;
+  --bg-deep: #050506;
+  --ink: #eef1ee;
+  --body: #b9c0ba;
+  --muted: #7d857f;
+  --faint: #5a615c;
+  --hair: #1d211e;
+  --hair-soft: #141715;
+  --card: #0e100f;
+  --card-hi: #121512;
+
+  /* The glasses: a lime that goes yellow at the top edge. */
+  --lime: #a8e327;
+  --lime-hot: #c8f03c;
+  --lime-deep: #6f9d15;
+  --lime-wash: rgba(168, 227, 39, 0.1);
+  --lime-line: rgba(168, 227, 39, 0.32);
+
+  --green: #a8e327;
+  --green-wash: rgba(168, 227, 39, 0.1);
+  --red: #ff6b5e;
+  --red-wash: rgba(255, 107, 94, 0.11);
+  --amber: #e0b341;
+
   --mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
-  --shadow: 0 1px 2px rgba(20, 24, 31, 0.04), 0 4px 16px rgba(20, 24, 31, 0.03);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 28px rgba(0, 0, 0, 0.35);
   --ease: cubic-bezier(0.25, 0.6, 0.3, 1);
 }
 
@@ -37,15 +46,32 @@ html {
   font-size: 15px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  color-scheme: dark;
 }
 
 body {
   min-height: 100vh;
+  position: relative;
+  background:
+    radial-gradient(900px 420px at 50% -180px, rgba(168, 227, 39, 0.055), transparent 70%),
+    var(--bg);
+}
+
+/* The grain the mark has. Fixed, so it sits over the page like film, not like
+   a texture that scrolls with the content. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
 }
 
 ::selection {
-  background: var(--blue);
-  color: #fff;
+  background: var(--lime);
+  color: #0a0c08;
 }
 
 a {
@@ -61,6 +87,8 @@ button {
   max-width: 1120px;
   margin: 0 auto;
   padding: 0 28px 72px;
+  position: relative;
+  z-index: 1;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -88,64 +116,90 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 0 16px;
+  padding: 16px 0 14px;
   margin-bottom: 30px;
   border-bottom: 1px solid var(--hair);
-  /* Opaque by default: a sticky header that lets the page bleed through is
-     unreadable. The frosted treatment is an upgrade, not the baseline. */
   background: var(--bg);
 }
 
 @supports ((backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px))) {
   .top {
-    background: color-mix(in srgb, var(--bg) 94%, transparent);
-    backdrop-filter: blur(12px) saturate(1.4);
-    -webkit-backdrop-filter: blur(12px) saturate(1.4);
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
   }
 }
 
 .brand {
   display: inline-flex;
-  align-items: baseline;
-  font-weight: 700;
-  font-size: 17px;
-  letter-spacing: -0.015em;
+  align-items: center;
+  gap: 11px;
 }
 
-.brand::before {
+/* The mark: a lime ring around a dark disc, the logo reduced to what survives
+   at 30 pixels. Replaced by the artwork itself once it lives in /public. */
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  flex: none;
+  background: radial-gradient(circle at 50% 38%, #1b1e1a, #0a0b09 70%);
+  border: 1.5px solid var(--lime-line);
+  position: relative;
+  box-shadow: 0 0 14px rgba(168, 227, 39, 0.16);
+}
+
+/* The glasses. */
+.brand-mark::after {
   content: "";
-  width: 9px;
-  height: 9px;
-  border-radius: 2.5px;
-  background: var(--blue);
-  margin-right: 9px;
-  align-self: center;
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  top: 12px;
+  height: 3.5px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, var(--lime-hot), var(--lime-deep));
+  box-shadow: 0 0 8px rgba(168, 227, 39, 0.6);
 }
 
-.brand span {
-  color: var(--faint);
-  font-weight: 500;
-  font-size: 10.5px;
+.brand-word {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
   letter-spacing: 0.14em;
-  margin-left: 12px;
+  color: var(--ink);
+}
+
+.brand-word em {
+  font-style: normal;
+  color: var(--lime);
+}
+
+.brand span.chain {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  margin-left: 4px;
 }
 
 nav.tabs {
   display: flex;
   gap: 4px;
-  font-size: 13.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 
 nav.tabs a {
   padding: 6px 13px;
   border-radius: 999px;
+  letter-spacing: 0.02em;
   transition: color 0.16s var(--ease), background 0.16s var(--ease);
 }
 
 nav.tabs a.active {
-  color: var(--blue-ink);
-  background: var(--blue-wash);
+  color: var(--lime);
+  background: var(--lime-wash);
   font-weight: 600;
 }
 
@@ -154,115 +208,47 @@ nav.tabs a:hover:not(.active) {
   background: var(--hair-soft);
 }
 
-.top-right {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-}
-
-/* ── wallet control ─────────────────────────────────── */
-
-.wallet-box { position: relative; }
-
-.wallet-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--card);
-  border: 1px solid var(--hair);
-  border-radius: 999px;
-  padding: 7px 15px;
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--ink);
-  cursor: pointer;
-  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
-}
-
-.wallet-btn:hover:not(:disabled) { border-color: var(--muted); box-shadow: var(--shadow); }
-.wallet-btn:disabled { opacity: 0.6; cursor: default; }
-
-.wallet-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--green);
-}
-
-.wallet-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 8px);
-  min-width: 260px;
-  background: var(--card);
-  border: 1px solid var(--hair);
-  border-radius: 12px;
-  box-shadow: 0 8px 28px rgba(20, 24, 31, 0.1);
-  padding: 6px;
-  z-index: 40;
-}
-
-.wallet-menu-addr {
-  padding: 8px 10px 10px;
-  color: var(--muted);
-  font-size: 11.5px;
-  word-break: break-all;
-  border-bottom: 1px solid var(--hair-soft);
-  margin-bottom: 4px;
-}
-
-.wallet-menu-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  border-radius: 8px;
-  padding: 9px 10px;
-  font-size: 13.5px;
-  color: var(--ink);
-  cursor: pointer;
-  transition: background 0.14s var(--ease);
-}
-
-.wallet-menu-item:hover { background: var(--hair-soft); }
-.wallet-menu-item.danger { color: var(--red); }
-
-.sr-note { display: none; }
-
-@media (max-width: 700px) {
-  .top-right { gap: 10px; }
-  .wallet-menu { min-width: 220px; }
-}
-
 /* ── type ───────────────────────────────────────────── */
 
 .kicker {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--lime);
   text-transform: uppercase;
 }
 
 h1 {
-  font-size: 29px;
-  font-weight: 720;
-  letter-spacing: -0.022em;
-  margin: 6px 0 4px;
+  font-size: 30px;
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  margin: 8px 0 6px;
+  color: #fff;
 }
 
 .lede {
   color: var(--muted);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.6;
   max-width: 62ch;
 }
 
+.lede a {
+  color: var(--body);
+  border-bottom: 1px solid var(--lime-line);
+}
+
+.lede a:hover {
+  color: var(--lime);
+}
+
 h2 {
-  font-size: 14.5px;
-  font-weight: 650;
-  letter-spacing: -0.005em;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
   margin-bottom: 12px;
 }
 
@@ -271,9 +257,9 @@ h2 {
   font-size: 12.5px;
 }
 
-.pos { color: var(--green); font-weight: 600; }
+.pos { color: var(--lime); font-weight: 600; }
 .neg { color: var(--red); font-weight: 600; }
-.blue { color: var(--blue); font-weight: 600; }
+.blue { color: var(--lime); font-weight: 600; }
 .dim { color: var(--muted); }
 
 /* ── layout pieces ──────────────────────────────────── */
@@ -290,24 +276,40 @@ h2 {
   border: 1px solid var(--hair);
   border-radius: 14px;
   padding: 18px 20px;
-  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+}
+
+/* A hairline of lime along the top edge — the ring, flattened. */
+.counter::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--lime-line), transparent);
 }
 
 .counter .value {
-  font-size: 25px;
-  font-weight: 700;
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: 600;
   letter-spacing: -0.01em;
-  color: var(--blue);
+  color: var(--lime);
   font-variant-numeric: tabular-nums;
 }
 
+/* Same reason as the metric strip: the counter's own colour would otherwise
+   win on source order and paint a loss the same green as a gain. */
+.counter .value.pos { color: var(--lime); }
+.counter .value.neg { color: var(--red); }
+
 .counter .label {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--faint);
-  margin-top: 5px;
+  margin-top: 6px;
 }
 
 .grid2 {
@@ -317,12 +319,19 @@ h2 {
   align-items: start;
 }
 
+/* A grid track sizes itself to its content's minimum, so a card holding a
+   620px-wide table pushed the column past the viewport and took the page with
+   it. Letting the track shrink hands the scrolling back to the card. */
+.grid2 > *,
+.run-columns > * {
+  min-width: 0;
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--hair);
   border-radius: 14px;
   padding: 20px 22px;
-  box-shadow: var(--shadow);
 }
 
 section {
@@ -331,28 +340,44 @@ section {
 
 /* ── tables ─────────────────────────────────────────── */
 
+/* A table with nine columns will not fit a narrow window, and a page that
+   scrolls sideways is a broken page. The table scrolls inside its own card. */
+.card:has(table) {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
 
+.card:has(table) table {
+  min-width: 620px;
+}
+
 th {
   text-align: left;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.11em;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--faint);
-  padding: 0 10px 9px 0;
+  padding: 0 10px 10px 0;
   border-bottom: 1px solid var(--hair);
 }
 
 td {
-  padding: 10px 10px 10px 0;
+  padding: 11px 10px 11px 0;
   border-bottom: 1px solid var(--hair-soft);
   font-variant-numeric: tabular-nums;
   vertical-align: top;
+  color: var(--body);
+}
+
+td strong {
+  color: var(--ink);
 }
 
 tr:last-child td {
@@ -360,16 +385,20 @@ tr:last-child td {
 }
 
 tr.rowlink td {
-  transition: background 0.14s var(--ease);
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
 }
 
 tr.rowlink:hover td {
-  background: var(--hair-soft);
+  background: var(--card-hi);
   cursor: pointer;
 }
 
+tr.rowlink:hover td strong {
+  color: var(--lime);
+}
+
 td .sub {
-  color: var(--muted);
+  color: var(--faint);
   font-size: 11.5px;
   margin-top: 2px;
 }
@@ -378,21 +407,23 @@ td .sub {
 
 .badge {
   display: inline-block;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  padding: 2.5px 9px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 3px 9px;
   border-radius: 999px;
   text-transform: uppercase;
+  border: 1px solid transparent;
 }
 
-.badge.acted { background: var(--green-wash); color: var(--green); }
-.badge.skipped { background: var(--hair-soft); color: var(--muted); }
+.badge.acted { background: var(--green-wash); color: var(--lime); border-color: var(--lime-line); }
+.badge.skipped { background: var(--hair-soft); color: var(--muted); border-color: var(--hair); }
 .badge.rejected { background: var(--red-wash); color: var(--red); }
 .badge.error { background: var(--red-wash); color: var(--red); }
-.badge.buy { background: var(--green-wash); color: var(--green); }
+.badge.buy { background: var(--green-wash); color: var(--lime); border-color: var(--lime-line); }
 .badge.sell { background: var(--red-wash); color: var(--red); }
-.badge.launch { background: var(--blue-wash); color: var(--blue); }
+.badge.launch { background: rgba(224, 179, 65, 0.12); color: var(--amber); }
 
 .reason {
   color: var(--muted);
@@ -406,8 +437,10 @@ footer {
   border-top: 1px solid var(--hair);
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--faint);
+  font-family: var(--mono);
+  letter-spacing: 0.04em;
 }
 
 @media (max-width: 860px) {
@@ -422,7 +455,7 @@ footer {
 .trade-tabs { display: flex; gap: 8px; }
 
 .btn {
-  background: var(--card);
+  background: transparent;
   color: var(--ink);
   border: 1px solid var(--hair);
   border-radius: 10px;
@@ -430,55 +463,59 @@ footer {
   cursor: pointer;
   font-weight: 500;
   transition: border-color 0.16s var(--ease), background 0.16s var(--ease),
-    transform 0.1s var(--ease), box-shadow 0.16s var(--ease);
+    color 0.16s var(--ease), transform 0.1s var(--ease);
 }
 
 .btn:hover:not(:disabled) {
-  border-color: var(--muted);
-  box-shadow: var(--shadow);
+  border-color: var(--lime-line);
+  color: var(--lime);
 }
 
 .btn:active:not(:disabled) {
   transform: scale(0.98);
 }
 
-.btn:disabled { opacity: 0.55; cursor: default; }
+.btn:disabled { opacity: 0.45; cursor: default; }
 
 .btn.primary {
-  background: var(--blue);
-  border-color: var(--blue);
-  color: #fff;
-  font-weight: 600;
+  background: var(--lime);
+  border-color: var(--lime);
+  color: #0a0c08;
+  font-weight: 650;
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: var(--blue-ink);
-  border-color: var(--blue-ink);
+  background: var(--lime-hot);
+  border-color: var(--lime-hot);
+  color: #0a0c08;
+  box-shadow: 0 0 22px rgba(168, 227, 39, 0.28);
 }
 
 .btn.tab { padding: 6px 14px; font-size: 13px; }
-.btn.tab.active { border-color: var(--blue); color: var(--blue); font-weight: 600; background: var(--blue-wash); }
+.btn.tab.active { border-color: var(--lime); color: var(--lime); font-weight: 600; background: var(--lime-wash); }
 
 .trade-input {
-  background: var(--card);
+  background: var(--bg-deep);
   color: var(--ink);
   border: 1px solid var(--hair);
   border-radius: 10px;
-  padding: 8px 12px;
+  padding: 9px 12px;
   width: 130px;
   font-size: 15px;
   font-family: var(--mono);
   transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
 }
 
+.trade-input::placeholder { color: var(--faint); }
+
 .trade-input:focus {
   outline: none;
-  border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgba(43, 86, 217, 0.13);
+  border-color: var(--lime);
+  box-shadow: 0 0 0 3px rgba(168, 227, 39, 0.14);
 }
 
 .trade-status { margin: 0; font-size: 13.5px; }
-.trade-status.ok { color: var(--green); }
+.trade-status.ok { color: var(--lime); }
 .trade-status.err { color: var(--red); word-break: break-word; }
 
 /* ── create agent ───────────────────────────────────── */
@@ -492,27 +529,113 @@ footer {
   padding: 14px 16px;
   text-align: left;
   cursor: pointer;
-  color: var(--body);
-  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease),
-    background 0.16s var(--ease);
+  color: var(--muted);
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease),
+    color 0.16s var(--ease);
 }
 
-.risk-card:hover:not(:disabled) { border-color: var(--muted); box-shadow: var(--shadow); }
+.risk-card:hover:not(:disabled) { border-color: var(--faint); color: var(--body); }
 
 .risk-card.active {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 1px var(--blue) inset, var(--shadow);
-  background: linear-gradient(180deg, var(--card), var(--blue-wash));
+  border-color: var(--lime);
+  background: var(--lime-wash);
+  color: var(--body);
 }
 
 .risk-title { font-weight: 600; color: var(--ink); margin-bottom: 4px; }
+.risk-card.active .risk-title { color: var(--lime); }
 
 .field-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  font-weight: 600;
+  color: var(--faint);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+/* ── wallet control ─────────────────────────────────── */
+
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.wallet-box { position: relative; }
+
+.wallet-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  padding: 7px 15px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--body);
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease), color 0.16s var(--ease);
+}
+
+.wallet-btn:hover:not(:disabled) { border-color: var(--lime-line); color: var(--lime); }
+.wallet-btn:disabled { opacity: 0.5; cursor: default; }
+
+.wallet-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--lime);
+  box-shadow: 0 0 8px var(--lime);
+}
+
+.wallet-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 264px;
+  background: var(--card);
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: 40;
+}
+
+.wallet-menu-addr {
+  padding: 9px 10px 10px;
+  color: var(--faint);
   font-size: 11px;
-  letter-spacing: 0.1em;
-  font-weight: 700;
-  color: var(--ink);
-  margin-bottom: 7px;
+  word-break: break-all;
+  border-bottom: 1px solid var(--hair-soft);
+  margin-bottom: 4px;
+}
+
+.wallet-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 13px;
+  color: var(--body);
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.wallet-menu-item:hover { background: var(--hair-soft); color: var(--lime); }
+.wallet-menu-item.danger { color: var(--red); }
+.wallet-menu-item.danger:hover { color: var(--red); }
+
+.sr-note { display: none; }
+
+@media (max-width: 700px) {
+  .top-right { gap: 10px; }
+  .wallet-menu { min-width: 220px; }
 }
 
 /* ── pilot bar ──────────────────────────────────────── */
@@ -526,21 +649,21 @@ footer {
   border-radius: 14px;
   padding: 14px 18px;
   margin-bottom: 18px;
-  box-shadow: var(--shadow);
   transition: border-color 0.3s var(--ease), background 0.3s var(--ease);
 }
 
 .pilot-bar.live {
-  border-color: color-mix(in srgb, var(--green) 35%, var(--hair));
-  background: linear-gradient(90deg, var(--green-wash), var(--card) 55%);
+  border-color: var(--lime-line);
+  background: linear-gradient(90deg, var(--lime-wash), var(--card) 60%);
 }
 
 .pilot-dot {
   flex: none;
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
-  background: var(--green);
+  background: var(--lime);
+  box-shadow: 0 0 10px var(--lime);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -548,17 +671,17 @@ footer {
     animation: pulse 2.2s var(--ease) infinite;
   }
   @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(23, 143, 105, 0.35); }
-    70% { box-shadow: 0 0 0 8px rgba(23, 143, 105, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(23, 143, 105, 0); }
+    0% { box-shadow: 0 0 0 0 rgba(168, 227, 39, 0.4); }
+    70% { box-shadow: 0 0 0 9px rgba(168, 227, 39, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(168, 227, 39, 0); }
   }
 }
 
-.pilot-dot.idle { background: var(--faint); }
+.pilot-dot.idle { background: var(--faint); box-shadow: none; }
 
 .pilot-text { flex: 1; min-width: 220px; }
-.pilot-title { font-weight: 650; font-size: 14px; letter-spacing: -0.005em; }
-.pilot-sub { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+.pilot-title { font-weight: 600; font-size: 14px; letter-spacing: -0.005em; color: var(--ink); }
+.pilot-sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 
 /* ── run screen ─────────────────────────────────────── */
 
@@ -570,11 +693,17 @@ footer {
   flex-wrap: wrap;
 }
 
-.run-state { font-size: 13px; letter-spacing: 0.04em; font-weight: 600; }
-.run-state.running { color: var(--green); }
+.run-state {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+}
+
+.run-state.running { color: var(--lime); }
 .run-state.paused { color: var(--amber); }
 .run-state.awaiting_funding, .run-state.error_recoverable { color: var(--red); }
-.run-state.activating { color: var(--blue); }
+.run-state.activating { color: var(--lime); }
 .run-state.grounded { color: var(--faint); }
 
 .metric-strip {
@@ -582,25 +711,33 @@ footer {
   margin: 24px 0 28px;
   border-top: 1px solid var(--hair);
   border-bottom: 1px solid var(--hair);
-  padding: 16px 0;
+  padding: 18px 0;
 }
 
 .metric-strip > div { flex: 1; padding: 0 20px; border-left: 1px solid var(--hair-soft); }
 .metric-strip > div:first-child { border-left: none; padding-left: 0; }
 
 .metric-value {
-  font-size: 24px;
-  font-weight: 680;
+  font-family: var(--mono);
+  font-size: 23px;
+  font-weight: 600;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
+  color: var(--ink);
 }
 
+/* A loss must read as a loss: .metric-value sets a colour and would otherwise
+   win on source order over the .pos/.neg the number was tagged with. */
+.metric-value.pos { color: var(--lime); }
+.metric-value.neg { color: var(--red); }
+
 .metric-label {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.14em;
   color: var(--faint);
-  margin-top: 3px;
+  margin-top: 5px;
+  text-transform: uppercase;
 }
 
 .run-columns { display: grid; grid-template-columns: 1fr; gap: 28px; }
@@ -609,18 +746,19 @@ footer {
 .decision-list { display: flex; flex-direction: column; }
 
 .decision-row {
-  padding: 11px 8px;
-  margin: 0 -8px;
+  padding: 12px 10px;
+  margin: 0 -10px;
   border-bottom: 1px solid var(--hair-soft);
   border-radius: 8px;
   transition: background 0.14s var(--ease);
 }
 
-.decision-row:hover { background: var(--hair-soft); }
+.decision-row:hover { background: var(--card-hi); }
 .decision-row:last-child { border-bottom: none; }
 
-.decision-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 2px; }
-.decision-links { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.decision-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 3px; }
+.decision-links { display: flex; gap: 14px; font-size: 11.5px; color: var(--faint); margin-top: 4px; }
+.decision-links a:hover { color: var(--lime); }
 
 /* ── fleet strip ────────────────────────────────────── */
 
@@ -629,40 +767,65 @@ footer {
 .fleet-chip {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   align-items: flex-start;
   background: var(--card);
   border: 1px solid var(--hair);
   border-radius: 12px;
-  padding: 10px 15px;
+  padding: 11px 15px;
   cursor: pointer;
-  color: var(--body);
+  color: var(--muted);
   text-decoration: none;
-  min-width: 132px;
-  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease),
-    background 0.16s var(--ease);
+  min-width: 134px;
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease);
 }
 
-.fleet-chip:hover { border-color: var(--muted); box-shadow: var(--shadow); }
+.fleet-chip:hover { border-color: var(--faint); }
 
 .fleet-chip.active {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 1px var(--blue) inset, var(--shadow);
-  background: linear-gradient(180deg, var(--card), var(--blue-wash));
+  border-color: var(--lime);
+  background: var(--lime-wash);
 }
 
-.fleet-chip.add { justify-content: center; align-items: center; color: var(--blue); font-weight: 600; }
-.fleet-handle { font-weight: 650; color: var(--ink); }
+.fleet-chip.add { justify-content: center; align-items: center; color: var(--lime); font-weight: 600; }
+.fleet-handle { font-weight: 600; color: var(--ink); }
 
 .fleet-state {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  color: var(--faint);
 }
 
-.fleet-state.running { color: var(--green); }
+.fleet-state.running { color: var(--lime); }
 .fleet-state.paused { color: var(--amber); }
 .fleet-state.awaiting_funding { color: var(--red); }
-.fleet-state.activating { color: var(--blue); }
+.fleet-state.activating { color: var(--lime); }
 .fleet-state.grounded { color: var(--faint); }
+
+/* ── small screens ──────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .shell { padding: 0 16px 56px; }
+
+  /* The header carried a mark, a wordmark, a network label, three tabs and a
+     wallet — more than 375px holds, so the page scrolled sideways. The network
+     label is the one piece the chain footer already states. */
+  .top { flex-wrap: wrap; gap: 10px 14px; padding: 14px 0 12px; }
+  .brand span.chain { display: none; }
+  nav.tabs { gap: 2px; font-size: 12.5px; }
+  nav.tabs a { padding: 5px 10px; }
+  .wallet-btn { padding: 6px 12px; font-size: 12px; }
+
+  h1 { font-size: 25px; }
+  .lede { font-size: 13.5px; }
+
+  /* Four metrics across 375px is four unreadable columns. */
+  .metric-strip { flex-wrap: wrap; gap: 18px 0; }
+  .metric-strip > div { flex: 1 1 45%; border-left: none; padding: 0; }
+  .metric-value { font-size: 20px; }
+
+  .counters { gap: 10px; }
+  .fleet-chip { min-width: 118px; }
+}

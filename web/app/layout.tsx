@@ -17,7 +17,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="shell">
           <header className="top">
             <Link href="/" className="brand">
-              Smiths Run<span>ARC TESTNET</span>
+              <span className="brand-mark" aria-hidden />
+              <span className="brand-word">
+                smiths<em>.</em>run
+              </span>
+              <span className="chain">ARC TESTNET</span>
             </Link>
             <div className="top-right">
               <Tabs />

@@ -464,7 +464,9 @@ export function RunScreen() {
                   <span className={`badge ${d.outcome === "acted" ? "buy" : d.outcome === "error" ? "sell" : ""}`}>
                     {(d.action ?? d.outcome ?? "run").toUpperCase()}
                   </span>
-                  {d.marketId !== null && <span className="mono dim">market {d.marketId}</span>}
+                  {d.marketId !== null && (
+                    <span className="mono dim">{d.symbol || `market ${d.marketId}`}</span>
+                  )}
                   {d.usdc && <span className="mono">{fmtUsdc(d.usdc)} USDC</span>}
                   {d.netResult !== null && (
                     <span className={`mono ${BigInt(d.netResult) > 0n ? "pos" : BigInt(d.netResult) < 0n ? "neg" : "dim"}`}>
@@ -498,7 +500,7 @@ export function RunScreen() {
               {(data.positions ?? []).map((p) => (
                 <Link key={p.marketId} href={`/markets/${p.marketId}`} className="decision-row" style={{ display: "block" }}>
                   <div className="decision-head">
-                    <span className="mono">market {p.marketId}</span>
+                    <span className="mono">{p.symbol || `market ${p.marketId}`}</span>
                     <span className="mono">{p.valueUsdc ? `${fmtUsdc(p.valueUsdc)} USDC` : "…"}</span>
                     <span className={`mono ${pct(p.costUsdc, p.valueUsdc).startsWith("+") ? "pos" : "neg"}`}>
                       {pct(p.costUsdc, p.valueUsdc)}

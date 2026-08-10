@@ -5,6 +5,7 @@
  */
 import { createPublicClient, fallback, http, parseAbi } from "viem";
 import { MARKETS, USDC } from "./shared.ts";
+import * as store from "./store.ts";
 
 const API = process.env.INDEXER_URL ?? "http://localhost:42069";
 
@@ -239,6 +240,14 @@ export async function fetchMarkets(): Promise<MarketView[]> {
           : pub.readContract({ address: m.token, abi: chainAbi, functionName: "name" }).catch(() => ""),
       ]);
       known.set(m.id.toString(), { ...m, symbol: symbol as string, name: name as string });
+    }
+
+    // Share what the chain just told us. The orchestrator holds this map, the
+    // API process does not, and both have to call a market by the same name.
+    try {
+      store.rememberMarkets([...known.values()]);
+    } catch {
+      // A naming convenience must never fail a run.
     }
 
     checkedAt = Date.now();

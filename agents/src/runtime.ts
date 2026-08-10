@@ -182,7 +182,7 @@ export async function runOnce(
         if (bought.report.verdict === "unfavourable") {
           store.finishRun(runId, "skipped", {
             reason:
-              `bought intelligence on market ${action.marketId} and declined: ` +
+              `bought intelligence on ${store.marketLabel(action.marketId)} and declined: ` +
               bought.report.findings[0],
             intelCost,
             intelVerdict,
@@ -254,15 +254,19 @@ export async function runOnce(
 }
 
 function summarize(action: { kind: string } & Record<string, unknown>): string {
+  // A decision reads back to its operator, and a coin has a name — the id is
+  // our addressing, not theirs. `marketLabel` falls back to the id whenever the
+  // ticker has not been read from the chain yet.
+  const where = (id: unknown) => store.marketLabel(String(id));
   switch (action.kind) {
     case "buy":
-      return `buy ${Number(action.usdcIn) / 1e6} USDC on market ${action.marketId}`;
+      return `buy ${Number(action.usdcIn) / 1e6} USDC of ${where(action.marketId)}`;
     case "sell":
-      return `sell ${action.tokens} tokens on market ${action.marketId}`;
+      return `sell ${action.tokens} tokens of ${where(action.marketId)}`;
     case "launch":
       return `launch ${action.symbol} with ${Number(action.initialBuy) / 1e6} USDC`;
     case "claim":
-      return `claim ${Number(action.amount) / 1e6} USDC of creator fees on market ${action.marketId}`;
+      return `claim ${Number(action.amount) / 1e6} USDC of creator fees on ${where(action.marketId)}`;
     default:
       return action.kind;
   }

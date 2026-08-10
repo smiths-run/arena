@@ -108,13 +108,21 @@ export interface RunOverview {
     positionCount: number;
     claimableFees: string | null;
   };
-  positions?: Array<{ marketId: string; tokens: string; costUsdc: string; valueUsdc: string | null }>;
+  positions?: Array<{
+    marketId: string;
+    /** The coin's ticker, or null until the chain read for it has landed. */
+    symbol: string | null;
+    tokens: string;
+    costUsdc: string;
+    valueUsdc: string | null;
+  }>;
   recentDecisions?: Array<{
     id: number;
     at: number;
     outcome: string | null;
     action: string | null;
     marketId: string | null;
+    symbol: string | null;
     usdc: string | null;
     reason: string;
     txHash: string | null;

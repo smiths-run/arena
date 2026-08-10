@@ -211,6 +211,18 @@ function applyChange(row: store.UserAgentRow, type: string, payload: Record<stri
   throw new Error(`unknown change type ${type}`);
 }
 
+/**
+ * Put the coin's name back into a sentence that was written with its id.
+ *
+ * A decision is stored once and read for as long as the agent exists, and the
+ * ticker may only have been read from the chain afterwards. This is the same
+ * market either way — the substitution renames nothing, it just stops the
+ * operator from having to remember that market 11 is the one they named.
+ */
+function named(text: string, tickers: Map<string, string>): string {
+  return text.replace(/\bmarket (\d+)\b/g, (whole, id: string) => tickers.get(id) ?? whole);
+}
+
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -338,7 +350,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
 
     const equity = priced.equity;
-    const positions = priced.held;
+    // The screen shows tickers; the ledger stores ids. One lookup labels both
+    // lists, and a market whose name has not been read yet simply has none.
+    const tickers = store.marketSymbols();
+    const positions = priced.held.map((p) => ({ ...p, symbol: tickers.get(p.marketId) ?? null }));
 
     const decisions = (store.db
       .prepare("SELECT * FROM runs WHERE agent = ? ORDER BY id DESC LIMIT 12")
@@ -348,8 +363,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       outcome: r.outcome,
       action: r.action_kind,
       marketId: r.market_id,
+      symbol: r.market_id ? (tickers.get(String(r.market_id)) ?? null) : null,
       usdc: r.usdc,
-      reason: String(r.reason ?? "").split("\n")[0].slice(0, 160),
+      reason: named(String(r.reason ?? "").split("\n")[0], tickers).slice(0, 160),
       txHash: r.tx_hash,
       signed: Boolean(r.receipt_signature),
       netResult:
@@ -516,7 +532,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           .prepare("SELECT * FROM runs WHERE agent = ? ORDER BY id DESC LIMIT ?")
           .all(agentName, limit)
       : store.db.prepare("SELECT * FROM runs ORDER BY id DESC LIMIT ?").all(limit);
-    return json(res, { runs: rows });
+    const tickers = store.marketSymbols();
+    const named_ = (rows as Array<Record<string, unknown>>).map((r) => ({
+      ...r,
+      reason: r.reason === null || r.reason === undefined ? r.reason : named(String(r.reason), tickers),
+      symbol: r.market_id ? (tickers.get(String(r.market_id)) ?? null) : null,
+    }));
+    return json(res, { runs: named_ });
   }
 
   /**

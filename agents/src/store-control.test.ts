@@ -48,3 +48,19 @@ test("heartbeat records and reads back", () => {
   store.heartbeat();
   assert.ok(store.lastHeartbeatAt() >= before);
 });
+
+test("a market is named by its ticker, and by its id until one is known", () => {
+  assert.equal(store.marketSymbol("11"), null, "nothing learned yet");
+  assert.equal(store.marketLabel("11"), "market 11", "id carries the label meanwhile");
+
+  store.rememberMarkets([{ id: 11n, symbol: "PULSE", name: "Pulse" }]);
+  assert.equal(store.marketSymbol("11"), "PULSE");
+  assert.equal(store.marketLabel(11n), "PULSE");
+  assert.equal(store.marketSymbols().get("11"), "PULSE");
+});
+
+test("a blank read never overwrites a name we already have", () => {
+  store.rememberMarkets([{ id: 12n, symbol: "EMBER", name: "Ember" }]);
+  store.rememberMarkets([{ id: 12n, symbol: "", name: "" }]);
+  assert.equal(store.marketSymbol(12n), "EMBER", "a rate-limited read is not a rename");
+});

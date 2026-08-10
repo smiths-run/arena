@@ -19,15 +19,18 @@ import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 
 export function describeAction(action: Action): string {
+  // This sentence is what the operator signs, so it names the coin the way
+  // they asked for it; the id remains the fallback until the ticker is known.
+  const where = (id: bigint) => store.marketLabel(id);
   switch (action.kind) {
     case "buy":
-      return `buy ${Number(action.usdcIn) / 1e6} USDC on market ${action.marketId}`;
+      return `buy ${Number(action.usdcIn) / 1e6} USDC of ${where(action.marketId)}`;
     case "sell":
-      return `sell ${action.tokens} tokens on market ${action.marketId}`;
+      return `sell ${action.tokens} tokens of ${where(action.marketId)}`;
     case "launch":
       return `launch ${action.symbol} ("${action.name}") with a ${Number(action.initialBuy) / 1e6} USDC initial buy`;
     case "claim":
-      return `claim ${Number(action.amount) / 1e6} USDC of creator fees on market ${action.marketId}`;
+      return `claim ${Number(action.amount) / 1e6} USDC of creator fees on ${where(action.marketId)}`;
     case "skip":
       return "do nothing";
   }

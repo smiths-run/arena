@@ -1012,6 +1012,67 @@ export function applyHistoryRange(
   }
 }
 
+/**
+ * What each market is called.
+ *
+ * The chain knows a market as an id; a reader knows it as a ticker. The id is
+ * what every internal path carries, so without a shared place to look the name
+ * up, "buy 0.75 USDC on market 11" is what the operator reads about a coin
+ * their agent chose by name. The registry is read from the chain once per
+ * market and kept here because the three processes do not share memory: the
+ * orchestrator writes decisions, the API answers screens, and both need the
+ * same answer.
+ *
+ * Blank symbols are never written over a known one — a name read that lost to
+ * a rate limit is our failure, not a rename.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS market_facts (
+    market_id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL DEFAULT ''
+  );
+`);
+
+export function rememberMarkets(
+  markets: Array<{ id: bigint | string; symbol: string; name: string }>,
+): void {
+  const put = db.prepare(
+    `INSERT INTO market_facts (market_id, symbol, name)
+     VALUES (?, ?, ?)
+     ON CONFLICT(market_id) DO UPDATE SET
+       symbol = CASE WHEN excluded.symbol <> '' THEN excluded.symbol ELSE market_facts.symbol END,
+       name   = CASE WHEN excluded.name   <> '' THEN excluded.name   ELSE market_facts.name   END`,
+  );
+  // Row by row on purpose: unlike the history walk, no two of these have to
+  // land together, so there is nothing to gain from holding a write lock that
+  // three processes are competing for.
+  for (const m of markets) put.run(m.id.toString(), m.symbol ?? "", m.name ?? "");
+}
+
+/** The ticker for one market, or null while the chain read has not landed. */
+export function marketSymbol(id: bigint | string | number | null | undefined): string | null {
+  if (id === null || id === undefined) return null;
+  const row = db.prepare("SELECT symbol FROM market_facts WHERE market_id = ?").get(id.toString()) as
+    | { symbol: string }
+    | undefined;
+  return row?.symbol ? row.symbol : null;
+}
+
+/** Every known ticker at once, for screens that label a whole list. */
+export function marketSymbols(): Map<string, string> {
+  const rows = db.prepare("SELECT market_id, symbol FROM market_facts WHERE symbol <> ''").all() as Array<{
+    market_id: string;
+    symbol: string;
+  }>;
+  return new Map(rows.map((r) => [r.market_id, r.symbol]));
+}
+
+/** How a market is named in prose: its ticker, or the id when it has none. */
+export function marketLabel(id: bigint | string | number): string {
+  return marketSymbol(id) ?? `market ${id}`;
+}
+
 export function marketHistory(): Array<{ marketId: string; volumeUsdc: string; tradeCount: number }> {
   return (
     db.prepare("SELECT market_id, volume_usdc, trade_count FROM market_history").all() as Array<{

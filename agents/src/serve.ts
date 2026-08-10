@@ -415,6 +415,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         id: m.id.toString(),
         symbol: m.symbol,
         name: m.name,
+        token: m.token,
         creator: m.creator,
         reserveUsdc: m.reserveUsdc.toString(),
         recentTrades: recentOf.get(m.id.toString()) ?? 0,

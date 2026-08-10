@@ -27,7 +27,7 @@ const ME: `0x${string}` = "0x1111111111111111111111111111111111111111";
 const OTHER: `0x${string}` = "0x2222222222222222222222222222222222222222";
 
 function market(id: bigint, creator: `0x${string}` = OTHER): MarketView {
-  return { id, creator, symbol: `M${id}`, name: `Market ${id}`, reserveUsdc: 126_000_000n, tradeCount: null };
+  return { id, token: "0x0000000000000000000000000000000000000dad", creator, symbol: `M${id}`, name: `Market ${id}`, reserveUsdc: 126_000_000n, tradeCount: null };
 }
 
 function trade(marketId: bigint, blockNumber: bigint, trader: `0x${string}` = OTHER): TradeView {

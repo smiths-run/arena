@@ -1,43 +1,19 @@
 /**
- * Server-side data access. Pages fetch straight from the two services; the
- * browser goes through the same-origin /api rewrites for live refresh.
+ * Server-side data access.
+ *
+ * Everything the site shows now comes from the agent service, which reads it
+ * from the chain. The indexer is no longer a dependency: it could not finish a
+ * backfill against Arc's public endpoints, and while it was the source the
+ * front page showed one market out of eleven and every other detail page
+ * answered with a 500. The browser reaches the same routes through the
+ * same-origin /api rewrites for live refresh.
  */
-const INDEXER = process.env.INDEXER_URL ?? "http://localhost:42069";
 const RECEIPTS = process.env.RECEIPTS_URL ?? "http://localhost:42070";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`${url} -> ${res.status}`);
   return res.json() as Promise<T>;
-}
-
-export interface Market {
-  id: string;
-  token: string;
-  creator: string;
-  name: string;
-  symbol: string;
-  reserveUsdc: string;
-  reserveToken: string;
-  volumeUsdc: string;
-  tradeCount: number;
-  creatorFeesAccrued: string;
-  creatorFeesClaimed: string;
-  createdAtBlock: string;
-  createdAtTx: string;
-}
-
-export interface Trade {
-  txHash: string;
-  logIndex: number;
-  marketId: string;
-  trader: string;
-  side: "buy" | "sell";
-  usdc: string;
-  tokens: string;
-  impactBps: string;
-  blockNumber: string;
-  timestamp: string;
 }
 
 export interface Run {
@@ -78,14 +54,6 @@ export interface RosterAgent {
   intelSoldCount: number;
   intelEarned: string;
   netResult: string;
-}
-
-export interface Stats {
-  marketCount: number;
-  tradeCount: number;
-  volumeUsdc: string;
-  protocolFeesClaimed: string;
-  creatorFeesClaimed: string;
 }
 
 export interface IntelPurchase {
@@ -171,16 +139,12 @@ export interface MyAgent {
   positions: number;
 }
 
-/**
- * The chain's own answer about what exists, served by the agent service from
- * the same cached reads its agents use. The indexer is history and can fall
- * behind; whether a market exists is not a matter of opinion, so the front
- * page asks here and treats the indexer as enrichment.
- */
+/** The chain's own answer about what exists, from the agent service's cache. */
 export interface ChainMarket {
   id: string;
   symbol: string;
   name: string;
+  token: string;
   creator: string;
   reserveUsdc: string;
   recentTrades: number;
@@ -212,12 +176,6 @@ export const api = {
     get<{ markets: ChainMarket[]; recentTrades: ChainTrade[]; history: HistoryStatus }>(
       `${RECEIPTS}/markets`,
     ),
-  stats: () => get<Stats>(`${INDEXER}/api/stats`),
-  markets: () => get<{ markets: Market[] }>(`${INDEXER}/api/markets`),
-  market: (id: string) => get<Market>(`${INDEXER}/api/markets/${id}`),
-  marketTrades: (id: string) =>
-    get<{ trades: Trade[] }>(`${INDEXER}/api/markets/${id}/trades?limit=50`),
-  activity: (limit = 40) => get<{ activity: Trade[] }>(`${INDEXER}/api/activity?limit=${limit}`),
   roster: () => get<{ agents: RosterAgent[] }>(`${RECEIPTS}/agents`),
   runs: (limit = 60) => get<{ runs: Run[] }>(`${RECEIPTS}/runs?limit=${limit}`),
   intel: () => get<IntelLedger>(`${RECEIPTS}/intel`),

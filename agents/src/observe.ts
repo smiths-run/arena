@@ -116,6 +116,7 @@ export const pub = new Proxy({} as (typeof clients)[number], {
 
 export interface MarketView {
   id: bigint;
+  token: `0x${string}`;
   creator: `0x${string}`;
   symbol: string;
   name: string;
@@ -155,6 +156,9 @@ interface MarketFacts {
 
 const known = new Map<string, MarketFacts>();
 const reserves = new Map<string, bigint>();
+/** Where each cached reserve came from, as block*1e6+logIndex, so a later
+    log always wins and an out-of-order one never overwrites a newer value. */
+const reserveSeenAt = new Map<string, bigint>();
 
 /** How long a market list may be reused before the chain is asked again. */
 const MARKETS_TTL_MS = 30_000;
@@ -221,6 +225,7 @@ export async function fetchMarkets(): Promise<MarketView[]> {
 
   return [...known.values()].map((m) => ({
     id: m.id,
+    token: m.token,
     creator: m.creator,
     symbol: m.symbol,
     name: m.name,
@@ -268,11 +273,27 @@ export async function fetchRecentTrades(): Promise<TradeView[]> {
       usdcIn?: bigint;
       usdcOut?: bigint;
       impactBps?: bigint;
+      reserveUsdc?: bigint;
     };
     blockNumber: bigint;
     transactionHash: `0x${string}`;
     logIndex: number;
   }>;
+
+  // Every buy and sell carries the curve's resulting reserve, so the logs we
+  // already have keep the cached reserves current for free. Without this they
+  // were frozen at whatever they were when the market was first seen and only
+  // moved on a restart — an audit against the chain caught two markets drifting
+  // exactly that way.
+  for (const l of logs) {
+    if (l.args.id === undefined || l.args.reserveUsdc === undefined) continue;
+    const key = l.args.id.toString();
+    const seen = reserveSeenAt.get(key);
+    const at = l.blockNumber * 1_000_000n + BigInt(l.logIndex);
+    if (seen !== undefined && seen >= at) continue;
+    reserveSeenAt.set(key, at);
+    reserves.set(key, l.args.reserveUsdc);
+  }
 
   const trades = logs
     .filter((l) => l.args.id !== undefined)

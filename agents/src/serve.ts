@@ -525,6 +525,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         intelSpent: String(bought?.total ?? "0"),
         intelSoldCount: sold?.count ?? 0,
         intelEarned: String(sold?.total ?? "0"),
+        // When this agent last actually ran. A visitor agent only runs while
+        // its operator's tab is flying it, so "active" and "running right now"
+        // are different claims and the page must be able to tell them apart.
+        lastRunAt: store.lastRunAt(a.name),
         netResult: store.netResultByAgent().find((n) => n.agent === a.name)?.net ?? "0",
       };
     }));

@@ -4,6 +4,42 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * What to call an agent's status, honestly.
+ *
+ * Every agent used to be labelled "live" as long as it held funds, which was
+ * a claim the page could not support: a visitor agent runs only while its
+ * operator's tab is flying it, and several had not run in days while wearing a
+ * green badge. So the label follows the last run, not the balance.
+ */
+function status(a: RosterAgent, broke: boolean) {
+  if (broke) {
+    return (
+      <span className="badge sell" title="below the operating reserve">
+        awaiting funds
+      </span>
+    );
+  }
+
+  const since = a.lastRunAt ? Date.now() - a.lastRunAt : Infinity;
+  if (since < 6 * 60_000) return <span className="badge buy">live</span>;
+
+  // House agents are hosted, so silence means something is wrong. Visitor
+  // agents are flown from a browser tab, so silence is simply nobody flying.
+  if (a.kind === "house") {
+    return (
+      <span className="badge rejected" title="hosted, but has not run recently">
+        stalled
+      </span>
+    );
+  }
+  return (
+    <span className="badge skipped" title="runs only while its operator's Run tab is open">
+      grounded
+    </span>
+  );
+}
+
 function RosterTable({ agents }: { agents: RosterAgent[] }) {
   return (
     <div className="card">
@@ -67,15 +103,7 @@ function RosterTable({ agents }: { agents: RosterAgent[] }) {
                 <td className={`mono ${net > 0n ? "pos" : net < 0n ? "neg" : ""}`} style={{ textAlign: "right" }}>
                   {signedUsdc(a.netResult)}
                 </td>
-                <td>
-                  {broke ? (
-                    <span className="badge sell" title="below the operating reserve; the treasury sweep will fund it">
-                      awaiting funds
-                    </span>
-                  ) : (
-                    <span className="badge buy">live</span>
-                  )}
-                </td>
+                <td>{status(a, broke)}</td>
               </tr>
             );
           })}

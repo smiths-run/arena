@@ -54,6 +54,8 @@ export interface RosterAgent {
   intelSoldCount: number;
   intelEarned: string;
   netResult: string;
+  /** Unix ms of this agent's last run, or 0 if it has never run. */
+  lastRunAt?: number;
 }
 
 export interface IntelPurchase {

@@ -12,7 +12,10 @@ import { verifyMessage } from "viem";
 import { fullRoster, resolve } from "./roster.ts";
 import { createUserAgent } from "./agent-factory.ts";
 import { handleAvailable } from "./identity.ts";
-import { RESERVED_NAMES } from "./visitor-strategy.ts";
+import { APPROACHES, RESERVED_NAMES, RISKS, deserializeStrategy, serializeStrategy, type Approach } from "./visitor-strategy.ts";
+import { confirmationHash, handleChatMessage, pendingView, reviveAction } from "./chat.ts";
+import { executeOperatorAction } from "./operator.ts";
+import type { PolicyConflict } from "./policy.ts";
 import { equityOf } from "./equity.ts";
 import { runOnce } from "./runtime.ts";
 import { historyStatus } from "./history.ts";
@@ -115,6 +118,97 @@ async function cached<T>(key: string, make: () => Promise<T>): Promise<T> {
   const value = await make();
   answers.set(key, { at: Date.now(), value });
   return value;
+}
+
+
+/** Verify a pilot grant (the browser tab's 24h authority) for a given owner. */
+async function verifyPilotGrant(
+  body: Record<string, unknown>,
+  expectedOwner: string,
+): Promise<string | null> {
+  const owner = typeof body.owner === "string" ? body.owner.toLowerCase() : "";
+  const expiry = Number(body.expiry ?? 0);
+  if (owner !== expectedOwner.toLowerCase()) return "not this agent's operator";
+  if (!Number.isFinite(expiry) || expiry < Date.now()) return "pilot grant expired — sign again";
+  const ok = await verifyMessage({
+    address: body.owner as `0x${string}`,
+    message: `Smiths Run: pilot ${owner} until ${expiry}`,
+    signature: body.signature as `0x${string}`,
+  }).catch(() => false);
+  return ok ? null : "pilot signature does not verify";
+}
+
+/** The operator's agent by handle, or their first. Row is undefined if none. */
+function ownedAgent(owner: string, handle: string): store.UserAgentRow | undefined {
+  const mine = owner ? store.userAgentsListByOwner(owner.toLowerCase()) : [];
+  const wanted = handle.toLowerCase();
+  return wanted ? mine.find((r) => r.name === wanted) : mine[0];
+}
+
+/**
+ * Apply a confirmed change. One implementation serves both paths — the Rules
+ * panel signing the exact mutation, and chat confirming an LLM proposal — so
+ * there is exactly one place where configuration actually moves.
+ */
+function applyChange(row: store.UserAgentRow, type: string, payload: Record<string, unknown>): string {
+  if (type === "pause") {
+    store.setPaused(row.name, true);
+    return "autonomous trading paused";
+  }
+  if (type === "resume") {
+    store.setPaused(row.name, false);
+    return "autonomous trading resumed";
+  }
+  if (type === "rule_add") {
+    const text = String(payload.text ?? "").slice(0, store.MAX_RULE_LENGTH);
+    if (!text) throw new Error("a rule needs text");
+    if (store.rulesOf(row.name).length >= store.MAX_RULES_PER_AGENT) {
+      throw new Error(`rule limit reached (${store.MAX_RULES_PER_AGENT})`);
+    }
+    store.ruleAdd(row.name, text);
+    return `rule added: "${text}"`;
+  }
+  if (type === "rule_edit") {
+    const text = String(payload.text ?? "").slice(0, store.MAX_RULE_LENGTH);
+    if (!store.ruleEdit(row.name, Number(payload.ruleId), text)) throw new Error("no such rule");
+    return "rule updated";
+  }
+  if (type === "rule_delete") {
+    if (!store.ruleDelete(row.name, Number(payload.ruleId))) throw new Error("no such rule");
+    return "rule removed";
+  }
+  if (type === "rule_toggle") {
+    if (!store.ruleSetEnabled(row.name, Number(payload.ruleId), payload.enabled === true)) {
+      throw new Error("no such rule");
+    }
+    return payload.enabled === true ? "rule enabled" : "rule disabled";
+  }
+  if (type === "mandate") {
+    const mandate = String(payload.mandate ?? "").slice(0, 280);
+    store.userAgentSetMandate(row.name, mandate || null);
+    return "mandate updated";
+  }
+  if (type === "approach") {
+    const v = String(payload.approach ?? "");
+    if (!APPROACHES.includes(v as Approach)) throw new Error("invalid approach");
+    store.userAgentSetApproach(row.name, v);
+    return `approach is now ${v}`;
+  }
+  if (type === "risk") {
+    const v = String(payload.risk ?? "") as keyof typeof RISKS;
+    const preset = RISKS[v];
+    if (!preset) throw new Error("invalid risk");
+    // The preset rewrites exactly the numbers Risk owns; everything else the
+    // strategy carries (launch names, cooldown, llm budget) stays as it was.
+    const strategy = deserializeStrategy(row.strategy);
+    strategy.maxTradeUsdc = preset.maxTradeUsdc;
+    strategy.takeProfitBps = preset.takeProfitBps;
+    strategy.stopLossBps = preset.stopLossBps;
+    strategy.minExternalTrades = preset.minExternalTrades;
+    store.userAgentSetStrategy(row.name, serializeStrategy(strategy));
+    return `risk is now ${v}`;
+  }
+  throw new Error(`unknown change type ${type}`);
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -545,6 +639,162 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       .all();
     const sales = store.db.prepare("SELECT * FROM intel_sales ORDER BY id DESC LIMIT 50").all();
     return json(res, { purchases, sales, totals: store.intelTotals() });
+  }
+
+
+  // ── the living-agent surface: chat, rules, confirmations ──────────────────
+
+  if (req.method === "GET" && url.pathname === "/chat/history") {
+    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
+    const row = ownedAgent(owner, url.searchParams.get("handle") ?? "");
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const active = store.confirmationActive(row.name);
+    return json(res, {
+      messages: store.chatHistory(row.name, 40),
+      pending: active ? pendingView(active) : null,
+      budget: { used: store.chatOperatorMessagesLast24h(row.name), max: 40 },
+    });
+  }
+
+  // Talking is read-level: the pilot grant that flies the agent also lets its
+  // operator speak to it. Anything the conversation proposes still needs a
+  // fresh signature to happen.
+  if (req.method === "POST" && url.pathname === "/chat/message") {
+    const body = await readJson(req);
+    const row = ownedAgent(String(body.owner ?? ""), String(body.handle ?? ""));
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const authErr = await verifyPilotGrant(body, row.owner ?? "");
+    if (authErr) return json(res, { error: authErr }, 403);
+    const message = String(body.message ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 1000);
+    if (!message) return json(res, { error: "empty message" }, 400);
+    const entry = resolve(row.name);
+    if (!entry) return json(res, { error: "agent is not active yet" }, 409);
+    const outcome = await handleChatMessage(entry, row, message);
+    return json(res, outcome);
+  }
+
+  // The signature IS the confirmation: it covers the confirmation id and a
+  // hash of the exact proposal, so what executes is what was shown.
+  if (req.method === "POST" && url.pathname === "/chat/confirm") {
+    const body = await readJson(req);
+    const row = ownedAgent(String(body.owner ?? ""), String(body.handle ?? ""));
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const id = Number(body.id ?? 0);
+    const active = store.confirmationActive(row.name);
+    if (!active || active.id !== id) {
+      return json(res, { error: "that proposal is gone — it expired or was replaced" }, 409);
+    }
+    const hash = confirmationHash(active.payload, active.summary);
+    const err = await verifyOwnerAction(body, `confirm #${id} ${hash}`, row.name, row.owner ?? "");
+    if (err) return json(res, { error: err }, 403);
+    const consumed = store.confirmationConsume(row.name, id);
+    if (!consumed) return json(res, { error: "already handled" }, 409);
+
+    let result: string;
+    let txHash: string | null = null;
+    try {
+      if (consumed.type === "action") {
+        const entry = resolve(row.name);
+        if (!entry) throw new Error("agent is not active");
+        const conflicts = consumed.conflicts
+          ? (JSON.parse(consumed.conflicts) as PolicyConflict[])
+          : [];
+        pilotClient ??= circle();
+        const r = await executeOperatorAction(pilotClient, entry, reviveAction(consumed.payload), conflicts, id);
+        txHash = r.txHash ?? null;
+        result =
+          r.outcome === "acted"
+            ? `done — ${r.detail}`
+            : r.outcome === "rejected"
+              ? `refused — ${r.detail}`
+              : `failed — ${r.detail}`;
+      } else {
+        result = applyChange(row, consumed.type, JSON.parse(consumed.payload) as Record<string, unknown>);
+      }
+    } catch (e) {
+      result = `failed — ${e instanceof Error ? e.message : String(e)}`;
+    }
+    store.chatAdd(row.name, "agent", `[confirmed #${id}] ${result}`);
+    return json(res, { result, txHash });
+  }
+
+  if (req.method === "POST" && url.pathname === "/chat/cancel") {
+    const body = await readJson(req);
+    const row = ownedAgent(String(body.owner ?? ""), String(body.handle ?? ""));
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const authErr = await verifyPilotGrant(body, row.owner ?? "");
+    if (authErr) return json(res, { error: authErr }, 403);
+    const id = Number(body.id ?? 0);
+    const consumed = store.confirmationConsume(row.name, id);
+    if (consumed) store.chatAdd(row.name, "agent", `[cancelled #${id}] ${consumed.summary}`);
+    return json(res, { cancelled: Boolean(consumed) });
+  }
+
+  if (req.method === "GET" && url.pathname === "/rules") {
+    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
+    const row = ownedAgent(owner, url.searchParams.get("handle") ?? "");
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    return json(res, {
+      rules: store.rulesOf(row.name).map((r) => ({
+        id: r.id,
+        text: r.text,
+        enabled: r.enabled === 1,
+      })),
+      mandate: row.mission,
+      approach: row.approach,
+    });
+  }
+
+  // Panel mutations: the wallet signs the exact mutation, no LLM in the path.
+  if (req.method === "POST" && url.pathname.startsWith("/rules/")) {
+    const body = await readJson(req);
+    const row = ownedAgent(String(body.owner ?? ""), String(body.handle ?? ""));
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+
+    const op = url.pathname.slice("/rules/".length);
+    let type: string;
+    let payload: Record<string, unknown>;
+    let actionMsg: string;
+    if (op === "add") {
+      const text = String(body.text ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, store.MAX_RULE_LENGTH);
+      type = "rule_add"; payload = { text };
+      actionMsg = `rule add ${confirmationHash(text, text)}`;
+    } else if (op === "delete") {
+      type = "rule_delete"; payload = { ruleId: Number(body.id ?? 0) };
+      actionMsg = `rule delete #${Number(body.id ?? 0)}`;
+    } else if (op === "toggle") {
+      type = "rule_toggle"; payload = { ruleId: Number(body.id ?? 0), enabled: body.enabled === true };
+      actionMsg = `rule toggle #${Number(body.id ?? 0)} ${body.enabled === true ? "on" : "off"}`;
+    } else {
+      return json(res, { error: "not found" }, 404);
+    }
+    const err = await verifyOwnerAction(body, actionMsg, row.name, row.owner ?? "");
+    if (err) return json(res, { error: err }, 403);
+    try {
+      return json(res, { result: applyChange(row, type, payload) });
+    } catch (e) {
+      return json(res, { error: e instanceof Error ? e.message : String(e) }, 400);
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/agent/set") {
+    const body = await readJson(req);
+    const row = ownedAgent(String(body.owner ?? ""), String(body.handle ?? ""));
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const field = String(body.field ?? "");
+    const value = String(body.value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+    if (!["mandate", "approach", "risk"].includes(field)) return json(res, { error: "unknown field" }, 400);
+    const actionMsg =
+      field === "mandate" ? `set mandate ${confirmationHash(value, value)}` : `set ${field} ${value.toLowerCase()}`;
+    const err = await verifyOwnerAction(body, actionMsg, row.name, row.owner ?? "");
+    if (err) return json(res, { error: err }, 403);
+    try {
+      const payload =
+        field === "mandate" ? { mandate: value } : field === "approach" ? { approach: value.toLowerCase() } : { risk: value.toLowerCase() };
+      return json(res, { result: applyChange(row, field, payload) });
+    } catch (e) {
+      return json(res, { error: e instanceof Error ? e.message : String(e) }, 400);
+    }
   }
 
   json(res, { error: "not found" }, 404);

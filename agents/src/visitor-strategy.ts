@@ -98,7 +98,7 @@ export interface VisitorPlan {
   strategy: Strategy;
 }
 
-const RISKS = {
+export const RISKS = {
   low: { maxTradeUsdc: 500_000n, takeProfitBps: 300n, stopLossBps: 1_000n, minExternalTrades: 2 },
   balanced: { maxTradeUsdc: 1_000_000n, takeProfitBps: 500n, stopLossBps: 1_500n, minExternalTrades: 1 },
   high: { maxTradeUsdc: 2_000_000n, takeProfitBps: 800n, stopLossBps: 2_500n, minExternalTrades: 1 },

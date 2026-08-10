@@ -173,6 +173,28 @@ export interface ChainTrade {
   blockNumber: string;
 }
 
+export interface ChatMessage {
+  id: number;
+  role: "operator" | "agent";
+  content: string;
+  created_at: number;
+}
+
+export interface PendingConfirmation {
+  id: number;
+  type: string;
+  summary: string;
+  conflicts: Array<{ rule: string; detail: string }>;
+  expiresAt: number;
+  hash: string;
+}
+
+export interface AgentRule {
+  id: number;
+  text: string;
+  enabled: boolean;
+}
+
 export const api = {
   chain: () =>
     get<{ markets: ChainMarket[]; recentTrades: ChainTrade[]; history: HistoryStatus }>(

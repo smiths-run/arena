@@ -159,6 +159,8 @@ const usd = (v: bigint) => (Number(v) / 1e6).toFixed(4);
 
 export interface PromptExtras {
   description: string;
+  /** Enabled persistent operator rules, in creation order. */
+  rules?: string[];
   positions: Array<{ marketId: bigint; tokens: bigint; costUsdc: bigint; valueUsdc: bigint }>;
   claimable: Array<{ marketId: bigint; amount: bigint }>;
 }
@@ -199,6 +201,13 @@ export function buildPrompt(
     ``,
     `Your operator's mandate:`,
     extras.description,
+    ...(extras.rules && extras.rules.length
+      ? [
+          ``,
+          `Persistent operator rules — they constrain your autonomous behaviour and only a signed operator override may cross them; the policy engine still binds either way:`,
+          ...extras.rules.slice(0, 20).map((r, i) => `${i + 1}. ${r.slice(0, 200)}`),
+        ]
+      : []),
     ``,
     `Each run you propose exactly one action: buy, sell, launch, claim, or skip. Skipping is a first-class outcome — act only when the data supports it, and say why either way. Your reason is recorded publicly and signed.`,
     ``,

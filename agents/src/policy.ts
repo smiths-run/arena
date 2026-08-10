@@ -47,6 +47,142 @@ const HARD_MAX_TRADE = 5_000_000n;
  */
 const GAS_HEADROOM_USDC = 20_000n; // 0.02 USDC
 
+/**
+ * The two-layer verdict, for operator-directed actions.
+ *
+ * An operator speaking to their own agent may override the agent's normal
+ * policy — its per-trade limit, its daily cap, its blocked markets — because
+ * those limits exist to govern the agent's autonomy, and a confirmed, signed
+ * operator command is not autonomy. What no signature can override is the
+ * layer that protects the system itself: the contract's hard ceilings, the
+ * gas the wallet must keep to act at all, selling more than is held, trading
+ * without a quote.
+ *
+ * The autonomous path never sees this function: for the agent acting alone,
+ * every conflict is a rejection, exactly as before.
+ */
+export interface PolicyConflict {
+  rule: string;
+  detail: string;
+}
+
+export type PolicyDecision =
+  | { status: "allowed" }
+  | { status: "needs_override"; conflicts: PolicyConflict[] }
+  | { status: "hard_rejected"; reason: string };
+
+export function decideLayered(
+  action: Action,
+  strategy: Strategy,
+  obs: Observation,
+): PolicyDecision {
+  if (action.kind === "skip") return { status: "allowed" };
+
+  // ── the hard layer: never crossed, whoever asks ────────────────────────────
+  const spend =
+    action.kind === "buy" ? action.usdcIn : action.kind === "launch" ? action.initialBuy : 0n;
+
+  if (spend > HARD_MAX_TRADE) {
+    return {
+      status: "hard_rejected",
+      reason: `the market contract caps a single trade at ${Number(HARD_MAX_TRADE) / 1e6} USDC`,
+    };
+  }
+  if (spend > 0n) {
+    // The operating reserve stays hard for operator commands too: gas here is
+    // USDC, and an agent spent to its last unit cannot even sell its way out.
+    const needed = spend + strategy.operatingReserveUsdc + GAS_HEADROOM_USDC;
+    if (obs.balanceUsdc < needed) {
+      return {
+        status: "hard_rejected",
+        reason:
+          `balance ${Number(obs.balanceUsdc) / 1e6} USDC cannot cover ${Number(spend) / 1e6} ` +
+          `plus the ${Number(strategy.operatingReserveUsdc) / 1e6} operating reserve and gas`,
+      };
+    }
+  }
+  if (action.kind === "buy" || action.kind === "sell") {
+    if (obs.quotedImpactBps === null) {
+      return { status: "hard_rejected", reason: "no quote available; refusing to trade blind" };
+    }
+    if (obs.quotedImpactBps > HARD_IMPACT_BPS) {
+      return {
+        status: "hard_rejected",
+        reason: `price impact ${obs.quotedImpactBps} bps exceeds the contract ceiling ${HARD_IMPACT_BPS} bps`,
+      };
+    }
+  }
+  if (action.kind === "sell") {
+    if (action.tokens <= 0n) return { status: "hard_rejected", reason: "sell of zero tokens" };
+    if (action.tokens > obs.positionTokens) {
+      return {
+        status: "hard_rejected",
+        reason: `sell exceeds the recorded position (${obs.positionTokens} tokens held)`,
+      };
+    }
+  }
+  if (action.kind === "launch" && action.initialBuy < 1_000_000n) {
+    return {
+      status: "hard_rejected",
+      reason: "launch below the contract's 1 USDC minimum initial buy",
+    };
+  }
+
+  // ── the agent-policy layer: overridable with a signed confirmation ─────────
+  const conflicts: PolicyConflict[] = [];
+
+  if (!strategy.allowedActions.includes(action.kind)) {
+    conflicts.push({
+      rule: "allowed actions",
+      detail: `"${action.kind}" is outside this agent's normal action set`,
+    });
+  }
+  if (spend > 0n) {
+    if (spend > strategy.maxTradeUsdc) {
+      conflicts.push({
+        rule: "max trade",
+        detail: `${Number(spend) / 1e6} USDC exceeds the normal ${Number(strategy.maxTradeUsdc) / 1e6} USDC per-trade limit`,
+      });
+    }
+    if (obs.spent24h + spend > strategy.dailySpendUsdc) {
+      conflicts.push({
+        rule: "daily spend",
+        detail: `${Number(obs.spent24h + spend) / 1e6} USDC would exceed the normal ${Number(strategy.dailySpendUsdc) / 1e6} USDC daily cap`,
+      });
+    }
+  }
+  if (
+    (action.kind === "buy" || action.kind === "sell") &&
+    strategy.blockedMarkets.includes(action.marketId)
+  ) {
+    conflicts.push({
+      rule: "blocked market",
+      detail: `market ${action.marketId} is blocked by this agent's configuration`,
+    });
+  }
+  if (
+    (action.kind === "buy" || action.kind === "sell") &&
+    obs.quotedImpactBps !== null &&
+    obs.quotedImpactBps > strategy.maxImpactBps
+  ) {
+    conflicts.push({
+      rule: "price impact",
+      detail: `${obs.quotedImpactBps} bps exceeds the agent's normal ${strategy.maxImpactBps} bps limit`,
+    });
+  }
+  if (action.kind === "claim" && action.amount <= GAS_HEADROOM_USDC / 4n) {
+    conflicts.push({ rule: "dust claim", detail: "the claim is worth less than its gas" });
+  }
+  if (action.kind === "launch" && obs.ownMarketCount >= strategy.maxOwnMarkets) {
+    conflicts.push({
+      rule: "own-market cap",
+      detail: `already created ${obs.ownMarketCount} of ${strategy.maxOwnMarkets} markets`,
+    });
+  }
+
+  return conflicts.length === 0 ? { status: "allowed" } : { status: "needs_override", conflicts };
+}
+
 export function evaluate(action: Action, strategy: Strategy, obs: Observation): Verdict {
   if (action.kind === "skip") return { ok: true };
 

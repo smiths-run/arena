@@ -18,6 +18,79 @@ import * as intel from "./intel.ts";
 import { equityOf, formatEquity } from "./equity.ts";
 import { signReceipt, type ReceiptBody } from "./receipt.ts";
 
+/** Snapshot equity at a run's open; a failed read is null, not a crash. */
+export async function openRunEquity(
+  agentName: string,
+  address: `0x${string}`,
+  runId: number,
+): Promise<Awaited<ReturnType<typeof equityOf>> | null> {
+  const opening = await equityOf(agentName, address).catch(() => null);
+  if (opening) store.recordEquity(runId, "open", opening.total, opening);
+  return opening;
+}
+
+/**
+ * Close a run: snapshot equity again, then sign the whole record from the
+ * agent's own wallet. Shared between autonomous runs and operator-directed
+ * ones, so an operator command produces exactly the same attributable,
+ * tamper-evident receipt as a run the agent chose for itself.
+ */
+export async function closeRunWithReceipt(
+  client: ReturnType<typeof circle>,
+  agent: { name: string; walletId: string; address: `0x${string}` },
+  runId: number,
+  trigger: string,
+  opening: Awaited<ReturnType<typeof equityOf>> | null,
+  log: (msg: string) => void,
+): Promise<void> {
+  const agentName = agent.name;
+  const closing = await equityOf(agentName, agent.address).catch(() => null);
+  if (closing) {
+    store.recordEquity(runId, "close", closing.total, closing);
+    if (opening) {
+      const delta = closing.total - opening.total;
+      const sign = delta >= 0n ? "+" : "";
+      log(`net ${sign}${Number(delta) / 1e6} USDC — ${formatEquity(closing)}`);
+    }
+  }
+
+  // Sign the finished run from the agent's own wallet. A refusal is not an
+  // onchain event and this does not pretend otherwise — but it makes the record
+  // attributable to the agent and tamper-evident, so a reader checks a signature
+  // instead of trusting our database.
+  try {
+    const row = store.runById(runId) as Record<string, string | null> | undefined;
+    if (!row) return;
+    const body: ReceiptBody = {
+      agent: agent.address,
+      agentName,
+      runId,
+      trigger,
+      outcome: String(row.outcome ?? "unknown"),
+      actionKind: row.action_kind ?? null,
+      reason: row.reason ?? null,
+      marketId: row.market_id ?? null,
+      txHash: row.tx_hash ?? null,
+      usdc: row.usdc ?? null,
+      intelCost: row.intel_cost ?? null,
+      intelVerdict: row.intel_verdict ?? null,
+      equityOpen: row.equity_open ?? null,
+      equityClose: row.equity_close ?? null,
+      netResult:
+        row.equity_open && row.equity_close
+          ? (BigInt(row.equity_close) - BigInt(row.equity_open)).toString()
+          : null,
+      codeVersion: process.env.CODE_VERSION ?? "dev",
+    };
+    const signed = await signReceipt(client, agent, body);
+    store.recordReceipt(runId, signed.detailsHash, signed.signature);
+  } catch (err) {
+    // An unsigned receipt is a weaker record, not a failed run. Say so rather
+    // than losing the run.
+    log(`receipt unsigned — ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 export async function runOnce(
   agentName: string,
   trigger: string,
@@ -35,56 +108,8 @@ export async function runOnce(
   // Equity is snapshotted around every run, including the ones that do nothing.
   // A run that refuses to trade still burns no money and should show a net result
   // of zero — which is only checkable if the zero was measured.
-  const opening = await equityOf(agentName, agent.address).catch(() => null);
-  if (opening) store.recordEquity(runId, "open", opening.total, opening);
-
-  const closeOut = async () => {
-    const closing = await equityOf(agentName, agent.address).catch(() => null);
-    if (closing) {
-      store.recordEquity(runId, "close", closing.total, closing);
-      if (opening) {
-        const delta = closing.total - opening.total;
-        const sign = delta >= 0n ? "+" : "";
-        log(`net ${sign}${Number(delta) / 1e6} USDC — ${formatEquity(closing)}`);
-      }
-    }
-
-    // Sign the finished run from the agent's own wallet. A refusal is not an
-    // onchain event and this does not pretend otherwise — but it makes the record
-    // attributable to the agent and tamper-evident, so a reader checks a signature
-    // instead of trusting our database.
-    try {
-      const row = store.runById(runId) as Record<string, string | null> | undefined;
-      if (!row) return;
-      const body: ReceiptBody = {
-        agent: agent.address,
-        agentName,
-        runId,
-        trigger,
-        outcome: String(row.outcome ?? "unknown"),
-        actionKind: row.action_kind ?? null,
-        reason: row.reason ?? null,
-        marketId: row.market_id ?? null,
-        txHash: row.tx_hash ?? null,
-        usdc: row.usdc ?? null,
-        intelCost: row.intel_cost ?? null,
-        intelVerdict: row.intel_verdict ?? null,
-        equityOpen: row.equity_open ?? null,
-        equityClose: row.equity_close ?? null,
-        netResult:
-          row.equity_open && row.equity_close
-            ? (BigInt(row.equity_close) - BigInt(row.equity_open)).toString()
-            : null,
-        codeVersion: process.env.CODE_VERSION ?? "dev",
-      };
-      const signed = await signReceipt(client, agent, body);
-      store.recordReceipt(runId, signed.detailsHash, signed.signature);
-    } catch (err) {
-      // An unsigned receipt is a weaker record, not a failed run. Say so rather
-      // than losing the run.
-      log(`receipt unsigned — ${err instanceof Error ? err.message : err}`);
-    }
-  };
+  const opening = await openRunEquity(agentName, agent.address, runId);
+  const closeOut = () => closeRunWithReceipt(client, agent, runId, trigger, opening, log);
 
   try {
     const [markets, recentTrades, balance, blockNow, ownOnChain] = await Promise.all([

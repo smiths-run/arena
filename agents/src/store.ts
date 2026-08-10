@@ -402,6 +402,23 @@ export function recentRuns(limit = 20): unknown[] {
   return db.prepare("SELECT * FROM runs ORDER BY id DESC LIMIT ?").all(limit);
 }
 
+export function recentRunsFor(
+  agent: string,
+  limit = 10,
+): Array<{
+  outcome: string | null;
+  action_kind: string | null;
+  market_id: string | null;
+  usdc: string | null;
+  reason: string | null;
+}> {
+  return db
+    .prepare(
+      "SELECT outcome, action_kind, market_id, usdc, reason FROM runs WHERE agent = ? ORDER BY id DESC LIMIT ?",
+    )
+    .all(agent, limit) as never;
+}
+
 export function lastRunAt(agent: string): number {
   const row = db
     .prepare("SELECT MAX(started_at) AS at FROM runs WHERE agent = ?")
@@ -702,6 +719,186 @@ export function userAgentSetHandleTx(name: string, txHash: string | null): void 
 
 export function userAgentSetMandate(name: string, mandate: string | null): void {
   db.prepare("UPDATE user_agents SET mission = ? WHERE name = ?").run(mandate, name);
+}
+
+export function userAgentSetApproach(name: string, approach: string): void {
+  db.prepare("UPDATE user_agents SET approach = ? WHERE name = ?").run(approach, name);
+}
+
+/** Replace the stored strategy wholesale — used when the Risk preset changes. */
+export function userAgentSetStrategy(name: string, strategyJson: string): void {
+  db.prepare("UPDATE user_agents SET strategy = ? WHERE name = ?").run(strategyJson, name);
+}
+
+// ── chat, rules, confirmations ──────────────────────────────────────────────
+//
+// The living-agent surface. Chat messages are the conversation; rules are the
+// operator's persistent free-text constraints (they can only tighten behaviour
+// — numbers loosen only through an explicit Risk change); a pending
+// confirmation is a proposed action or change waiting for the operator's
+// signature. At most one pending confirmation per agent: proposing a new one
+// cancels the old, which keeps "yes" unambiguous.
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    role TEXT NOT NULL,              -- operator | agent
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS chat_agent ON chat_messages(agent, id);
+
+  CREATE TABLE IF NOT EXISTS agent_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    text TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS rules_agent ON agent_rules(agent, id);
+
+  CREATE TABLE IF NOT EXISTS pending_confirmations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL,           -- JSON, exact proposed action/change
+    summary TEXT NOT NULL,           -- what the operator is shown and signs over
+    conflicts TEXT,                  -- JSON PolicyConflict[] when it is an override
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    consumed_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS confirmations_agent ON pending_confirmations(agent, id);
+`);
+
+export function chatAdd(agent: string, role: "operator" | "agent", content: string): number {
+  const r = db
+    .prepare("INSERT INTO chat_messages (agent, role, content, created_at) VALUES (?, ?, ?, ?)")
+    .run(agent, role, content, Date.now());
+  return Number(r.lastInsertRowid);
+}
+
+export function chatHistory(
+  agent: string,
+  limit = 40,
+): Array<{ id: number; role: string; content: string; created_at: number }> {
+  return (
+    db
+      .prepare("SELECT id, role, content, created_at FROM chat_messages WHERE agent = ? ORDER BY id DESC LIMIT ?")
+      .all(agent, limit) as Array<{ id: number; role: string; content: string; created_at: number }>
+  ).reverse();
+}
+
+/** Operator messages in the last 24h — the chat inference budget's meter. */
+export function chatOperatorMessagesLast24h(agent: string): number {
+  const row = db
+    .prepare(
+      "SELECT COUNT(*) n FROM chat_messages WHERE agent = ? AND role = 'operator' AND created_at > ?",
+    )
+    .get(agent, Date.now() - 24 * 3600 * 1000) as { n: number };
+  return row.n;
+}
+
+export interface AgentRuleRow {
+  id: number;
+  agent: string;
+  text: string;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export const MAX_RULES_PER_AGENT = 20;
+export const MAX_RULE_LENGTH = 200;
+
+export function rulesOf(agent: string): AgentRuleRow[] {
+  return db
+    .prepare("SELECT * FROM agent_rules WHERE agent = ? ORDER BY id")
+    .all(agent) as unknown as AgentRuleRow[];
+}
+
+export function ruleAdd(agent: string, text: string): number {
+  const r = db
+    .prepare("INSERT INTO agent_rules (agent, text, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?)")
+    .run(agent, text, Date.now(), Date.now());
+  return Number(r.lastInsertRowid);
+}
+
+export function ruleSetEnabled(agent: string, id: number, enabled: boolean): boolean {
+  const r = db
+    .prepare("UPDATE agent_rules SET enabled = ?, updated_at = ? WHERE agent = ? AND id = ?")
+    .run(enabled ? 1 : 0, Date.now(), agent, id);
+  return r.changes > 0;
+}
+
+export function ruleEdit(agent: string, id: number, text: string): boolean {
+  const r = db
+    .prepare("UPDATE agent_rules SET text = ?, updated_at = ? WHERE agent = ? AND id = ?")
+    .run(text, Date.now(), agent, id);
+  return r.changes > 0;
+}
+
+export function ruleDelete(agent: string, id: number): boolean {
+  const r = db.prepare("DELETE FROM agent_rules WHERE agent = ? AND id = ?").run(agent, id);
+  return r.changes > 0;
+}
+
+export interface PendingConfirmationRow {
+  id: number;
+  agent: string;
+  type: string;
+  payload: string;
+  summary: string;
+  conflicts: string | null;
+  created_at: number;
+  expires_at: number;
+  consumed_at: number | null;
+}
+
+/** Propose something; any earlier live proposal for this agent is cancelled. */
+export function confirmationCreate(
+  agent: string,
+  type: string,
+  payload: string,
+  summary: string,
+  conflicts: string | null,
+  ttlMs = 5 * 60_000,
+): number {
+  db.prepare(
+    "UPDATE pending_confirmations SET consumed_at = ? WHERE agent = ? AND consumed_at IS NULL",
+  ).run(Date.now(), agent);
+  const r = db
+    .prepare(
+      `INSERT INTO pending_confirmations (agent, type, payload, summary, conflicts, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(agent, type, payload, summary, conflicts, Date.now(), Date.now() + ttlMs);
+  return Number(r.lastInsertRowid);
+}
+
+export function confirmationActive(agent: string): PendingConfirmationRow | undefined {
+  const row = db
+    .prepare(
+      "SELECT * FROM pending_confirmations WHERE agent = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1",
+    )
+    .get(agent) as PendingConfirmationRow | undefined;
+  if (!row) return undefined;
+  if (row.expires_at < Date.now()) return undefined;
+  return row;
+}
+
+/** Consume exactly once. Returns the row only on the first successful consume. */
+export function confirmationConsume(agent: string, id: number): PendingConfirmationRow | undefined {
+  const row = db
+    .prepare("SELECT * FROM pending_confirmations WHERE agent = ? AND id = ?")
+    .get(agent, id) as PendingConfirmationRow | undefined;
+  if (!row || row.consumed_at !== null || row.expires_at < Date.now()) return undefined;
+  const r = db
+    .prepare("UPDATE pending_confirmations SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL")
+    .run(Date.now(), id);
+  return r.changes > 0 ? row : undefined;
 }
 
 /** Agents the activation sweep should look at: not yet active, or active but missing identity. */

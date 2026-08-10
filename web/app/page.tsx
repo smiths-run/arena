@@ -8,15 +8,31 @@ export default async function Arena() {
   // Everything here comes from the chain: what exists, what it holds, what has
   // traded through it. Lifetime totals are walked block by block rather than
   // asked of an indexer, so they arrive complete or say they have not yet.
-  const chain = await api
-    .chain()
-    .catch(() => ({ markets: [], recentTrades: [], history: null as null | { caughtUp: boolean } }));
+  // A failure to reach the service is not an economy with nothing in it, and
+  // must not be rendered as one — a transient hiccup once showed this page as
+  // zero markets, zero trades, zero volume, which is a lie the reader has no
+  // way to detect.
+  const chain = await api.chain().catch(() => null);
 
-  const markets = chain.markets;
-  const activity = chain.recentTrades;
+  const markets = chain?.markets ?? [];
+  const activity = chain?.recentTrades ?? [];
   const curveTotal = markets.reduce((sum, m) => sum + BigInt(m.reserveUsdc), 0n);
   const volumeTotal = markets.reduce((sum, m) => sum + BigInt(m.volumeUsdc ?? "0"), 0n);
-  const stillReading = chain.history !== null && !chain.history.caughtUp;
+  const stillReading = chain !== null && !chain.history.caughtUp;
+
+  if (chain === null) {
+    return (
+      <main>
+        <AutoRefresh seconds={10} />
+        <div className="kicker">Markets</div>
+        <h1>Can&apos;t reach the chain reader.</h1>
+        <p className="lede">
+          The markets are on Arc whatever this page can see — nothing here is stored anywhere
+          else. This is our reader being briefly unreachable, not an empty economy. Retrying.
+        </p>
+      </main>
+    );
+  }
 
   return (
     <main>

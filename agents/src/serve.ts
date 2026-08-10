@@ -102,6 +102,10 @@ async function balanceOf(address: string): Promise<string | null> {
  * every request waited behind the last. Serving a few-second-old answer is the
  * difference between a live screen and no screen.
  */
+/** The last chain snapshot that succeeded, kept so a hiccup reads as stale
+    rather than as an economy with nothing in it. */
+let lastGoodChain: { markets: obs.MarketView[]; flow: obs.TradeView[]; at: number } | null = null;
+
 const answers = new Map<string, { at: number; value: unknown }>();
 const ANSWER_TTL_MS = 20_000;
 
@@ -430,7 +434,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
    * cache, so this costs nothing extra.
    */
   if (url.pathname === "/markets") {
-    const [markets, flow] = await Promise.all([obs.fetchMarkets(), obs.fetchRecentTrades()]);
+    // A momentary failure here — a saturated queue, an endpoint refusing —
+    // must not be reported as an empty economy. The last good answer is far
+    // closer to the truth than zero, and the caller is told it is stale.
+    let markets: obs.MarketView[];
+    let flow: obs.TradeView[];
+    try {
+      [markets, flow] = await Promise.all([obs.fetchMarkets(), obs.fetchRecentTrades()]);
+      lastGoodChain = { markets, flow, at: Date.now() };
+    } catch (err) {
+      if (!lastGoodChain) throw err;
+      markets = lastGoodChain.markets;
+      flow = lastGoodChain.flow;
+    }
     const recentOf = new Map<string, number>();
     for (const t of flow) {
       const key = t.marketId.toString();
@@ -453,6 +469,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         tradeCount: history.get(m.id.toString())?.tradeCount ?? null,
       })),
       history: historyStatus(),
+      // How old this answer is. Zero when it was just read from the chain.
+      staleForMs: lastGoodChain ? Date.now() - lastGoodChain.at : 0,
       // Newest first, the way a reader scans it.
       recentTrades: [...flow]
         .sort((a, b) =>

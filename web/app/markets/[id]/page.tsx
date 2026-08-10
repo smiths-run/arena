@@ -14,15 +14,16 @@ export const dynamic = "force-dynamic";
  */
 export default async function MarketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const chain = await api
-    .chain()
-    .catch(() => ({ markets: [], recentTrades: [], history: null as null | { caughtUp: boolean } }));
+  // Unreachable is not the same as nonexistent: a hiccup must not turn a real
+  // market into a 404.
+  const chain = await api.chain().catch(() => null);
+  if (chain === null) throw new Error("chain reader unreachable");
 
   const market = chain.markets.find((m) => m.id === id);
   if (!market) notFound();
 
   const trades = chain.recentTrades.filter((t) => t.marketId === id);
-  const stillReading = chain.history !== null && !chain.history.caughtUp;
+  const stillReading = !chain.history.caughtUp;
 
   return (
     <main>

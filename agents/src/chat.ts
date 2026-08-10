@@ -42,12 +42,36 @@ export function confirmationHash(payload: string, summary: string): string {
   return createHash("sha256").update(payload).update(summary).digest("hex").slice(0, 8);
 }
 
+/** The conflicts recorded against a proposal; unreadable data reads as one. */
+export function statedConflicts(row: { conflicts: string | null }): PolicyConflict[] {
+  if (!row.conflicts) return [];
+  try {
+    const parsed = JSON.parse(row.conflicts) as PolicyConflict[];
+    return Array.isArray(parsed) ? parsed : [{ rule: "unreadable", detail: row.conflicts }];
+  } catch {
+    return [{ rule: "unreadable", detail: row.conflicts }];
+  }
+}
+
+/**
+ * Does confirming this cross a rule the operator set?
+ *
+ * This is the whole of the auth decision on a confirmation: false means the
+ * pilot grant is enough, true means the wallet signs. It is a function rather
+ * than an inline check so the answer can be tested without an HTTP server —
+ * getting it wrong in the false direction executes an override nobody agreed
+ * to, so unreadable conflict data deliberately answers true.
+ */
+export function crossesOperatorRule(row: { conflicts: string | null }): boolean {
+  return statedConflicts(row).length > 0;
+}
+
 export function pendingView(row: store.PendingConfirmationRow): PendingView {
   return {
     id: row.id,
     type: row.type,
     summary: row.summary,
-    conflicts: row.conflicts ? (JSON.parse(row.conflicts) as PolicyConflict[]) : [],
+    conflicts: statedConflicts(row),
     expiresAt: row.expires_at,
     hash: confirmationHash(row.payload, row.summary),
   };

@@ -12,6 +12,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decideLayered, evaluate, type Action, type Observation } from "./policy.ts";
+import { crossesOperatorRule, statedConflicts } from "./chat.ts";
 import { STRATEGIES } from "./config.ts";
 
 process.env.AGENTS_DATA_DIR = mkdtempSync(join(tmpdir(), "smiths-operator-"));
@@ -115,4 +116,28 @@ test("rules round-trip with enable, edit and delete", () => {
   assert.equal(store.rulesOf("ruletest")[0].text, "Never buy $DOG or $CAT.");
   assert.ok(store.ruleDelete("ruletest", id));
   assert.equal(store.rulesOf("ruletest").length, 0);
+});
+
+// ── which credential a confirmation demands ────────────────────────────────
+//
+// The pilot grant is a session; a signature is an override. Everything the
+// operator's own rules permit rides the session, and only crossing one of
+// those rules brings the wallet back. Getting this wrong in the permissive
+// direction executes an override nobody agreed to, which is why unreadable
+// conflict data is treated as a crossing rather than as none.
+
+test("a proposal inside the operator's rules needs no signature", () => {
+  assert.equal(crossesOperatorRule({ conflicts: null }), false);
+  assert.equal(crossesOperatorRule({ conflicts: "[]" }), false, "an empty list is not a conflict");
+});
+
+test("a proposal that crosses a rule demands the wallet", () => {
+  const conflicts = JSON.stringify([{ rule: "max trade", detail: "2 USDC over the 1 USDC limit" }]);
+  assert.equal(crossesOperatorRule({ conflicts }), true);
+});
+
+test("unreadable conflict data is treated as a crossing, not as none", () => {
+  assert.equal(crossesOperatorRule({ conflicts: "{not json" }), true);
+  assert.equal(crossesOperatorRule({ conflicts: '"a string"' }), true, "valid JSON, wrong shape");
+  assert.equal(statedConflicts({ conflicts: "{not json" })[0].rule, "unreadable");
 });

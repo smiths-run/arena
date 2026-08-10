@@ -3,11 +3,15 @@
 /**
  * Talking to your agent.
  *
- * Reads ride the pilot grant — one stored signature covers the conversation.
- * Anything the conversation proposes (a trade, a rule, a config change) shows
- * up as a card with the exact wording, and executes only when the operator
- * signs that exact proposal. The signature is the confirmation: nobody is
- * asked "are you sure" twice, and nothing moves on a button alone.
+ * The pilot grant is the session: one stored signature covers the conversation,
+ * the rules you write, and the proposals that stay inside them. Anything the
+ * conversation proposes still surfaces as a card with the exact wording, and
+ * still executes on an explicit act — but that act is a click, because you
+ * already proved who you are today.
+ *
+ * The wallet comes back for one thing: a proposal that crosses a rule you set.
+ * Then the signature covers that exact proposal, so the override is a decision
+ * you made rather than a button you happened to hit.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -15,16 +19,6 @@ import type { Address } from "viem";
 import { connectWallet, onAccountsChanged, restoreWallet, signMessage } from "@/lib/wallet";
 import { createGrant, loadGrant, type PilotGrant } from "@/lib/pilot";
 import type { AgentRule, ChatMessage, MyAgent, PendingConfirmation } from "@/lib/api";
-
-/** sha256(a || b), first 8 hex chars — mirrors the server's confirmationHash. */
-async function hash8(a: string, b: string): Promise<string> {
-  const data = new TextEncoder().encode(a + b);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(digest)]
-    .map((x) => x.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 8);
-}
 
 const APPROACH_OPTIONS = ["scout", "momentum", "contrarian", "builder"];
 const RISK_OPTIONS = ["low", "balanced", "high"];
@@ -139,20 +133,36 @@ export function ChatScreen() {
     }
   };
 
+  /**
+   * Confirm what the agent proposed.
+   *
+   * Inside your own rules this is a click: the grant that let you ask for it is
+   * the same authority that lets it happen. Crossing one of those rules is the
+   * exception the wallet is for, and only then does a signature get asked for.
+   */
   const confirm = async () => {
     if (!account || !selected || !pending) return;
+    const override = pending.conflicts.length > 0;
     setError(null);
-    setBusy("waiting for your signature…");
+    setBusy(override ? "waiting for your signature…" : "confirming…");
     try {
       const ts = Date.now();
-      const signature = await signMessage(
-        account,
-        `Smiths Run: confirm #${pending.id} ${pending.hash} @${selected} ${ts}`,
-      );
+      const auth = override
+        ? {
+            ts,
+            signature: await signMessage(
+              account,
+              `Smiths Run: confirm #${pending.id} ${pending.hash} @${selected} ${ts}`,
+            ),
+          }
+        : await (async () => {
+            const g = await ensureGrant();
+            return { expiry: g.expiry, signature: g.signature };
+          })();
       const res = await fetch("/api/runs/chat/confirm", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: account, handle: selected, id: pending.id, ts, signature }),
+        body: JSON.stringify({ owner: account, handle: selected, id: pending.id, ...auth }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "confirm failed");
@@ -188,18 +198,30 @@ export function ChatScreen() {
     }
   };
 
-  /** Panel mutations: sign the exact change, no LLM in the path. */
-  const signed = async (action: string, path: string, extra: Record<string, unknown>) => {
+  /**
+   * Panel mutations: no LLM in the path, and no wallet either.
+   *
+   * A rule is the operator writing down their own constraint. Charging a
+   * signature for that made the list something to avoid touching, which is the
+   * opposite of what a list of live constraints should be — so it rides the
+   * same grant that flies the agent.
+   */
+  const change = async (path: string, extra: Record<string, unknown>) => {
     if (!account || !selected) return;
     setError(null);
-    setBusy("waiting for your signature…");
+    setBusy("saving…");
     try {
-      const ts = Date.now();
-      const signature = await signMessage(account, `Smiths Run: ${action} @${selected} ${ts}`);
+      const g = await ensureGrant();
       const res = await fetch(`/api/runs/${path}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: account, handle: selected, ts, signature, ...extra }),
+        body: JSON.stringify({
+          owner: account,
+          handle: selected,
+          expiry: g.expiry,
+          signature: g.signature,
+          ...extra,
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "failed");
@@ -214,8 +236,7 @@ export function ChatScreen() {
   const addRule = async () => {
     const text = newRule.trim();
     if (!text) return;
-    const h = await hash8(text, text);
-    await signed(`rule add ${h}`, "rules/add", { text });
+    await change("rules/add", { text });
     setNewRule("");
   };
 
@@ -287,8 +308,8 @@ export function ChatScreen() {
             {messages.length === 0 && (
               <p className="dim" style={{ fontSize: 13.5 }}>
                 This is a private line to @{selected}. Ask what it holds, why it acted, what it
-                thinks — or tell it what to do. Anything that moves money or changes its rules
-                will come back as a proposal for your signature.
+                thinks — or tell it what to do. Anything that moves money comes back as a proposal
+                you confirm; crossing a rule you set is the one thing your wallet still signs.
               </p>
             )}
             {messages.map((m, i) => (
@@ -302,7 +323,9 @@ export function ChatScreen() {
 
           {pending && (
             <div className="card confirm-card">
-              <div className="confirm-title">Awaiting your signature</div>
+              <div className="confirm-title">
+                {pending.conflicts.length > 0 ? "This crosses a rule you set" : "Ready when you are"}
+              </div>
               <div className="confirm-summary">{pending.summary}</div>
               {pending.conflicts.length > 0 && (
                 <div className="confirm-conflicts">
@@ -315,13 +338,15 @@ export function ChatScreen() {
               )}
               <div className="trade-row">
                 <button className="btn primary" onClick={confirm} disabled={busy !== null}>
-                  {busy ?? "Sign & confirm"}
+                  {busy ?? (pending.conflicts.length > 0 ? "Sign & override" : "Confirm")}
                 </button>
                 <button className="btn" onClick={cancel} disabled={busy !== null}>
                   Cancel
                 </button>
                 <span className="dim" style={{ fontSize: 12 }}>
-                  Your signature is the confirmation — hard protocol limits still apply.
+                  {pending.conflicts.length > 0
+                    ? "Crossing your own rule takes a signature. Hard protocol limits still apply."
+                    : "Inside your rules, so no signature. Hard protocol limits still apply."}
                 </span>
               </div>
             </div>
@@ -374,7 +399,7 @@ export function ChatScreen() {
                 className="trade-input"
                 style={{ width: "auto" }}
                 value={meta.approach}
-                onChange={(e) => signed(`set approach ${e.target.value}`, "agent/set", { field: "approach", value: e.target.value })}
+                onChange={(e) => change("agent/set", { field: "approach", value: e.target.value })}
                 disabled={busy !== null}
               >
                 {APPROACH_OPTIONS.map((a) => (
@@ -389,7 +414,7 @@ export function ChatScreen() {
                 defaultValue=""
                 onChange={(e) => {
                   if (e.target.value) {
-                    signed(`set risk ${e.target.value}`, "agent/set", { field: "risk", value: e.target.value });
+                    change("agent/set", { field: "risk", value: e.target.value });
                     e.target.value = "";
                   }
                 }}
@@ -406,7 +431,7 @@ export function ChatScreen() {
               </select>
             </div>
             <p className="dim" style={{ fontSize: 11.5, marginTop: 8 }}>
-              Every change is signed by your wallet and takes effect on the next run.
+              Changes take effect on the next run.
             </p>
           </div>
 
@@ -424,7 +449,7 @@ export function ChatScreen() {
                   <button
                     className="rule-toggle"
                     title={r.enabled ? "disable" : "enable"}
-                    onClick={() => signed(`rule toggle #${r.id} ${r.enabled ? "off" : "on"}`, "rules/toggle", { id: r.id, enabled: !r.enabled })}
+                    onClick={() => change("rules/toggle", { id: r.id, enabled: !r.enabled })}
                     disabled={busy !== null}
                     type="button"
                   >
@@ -434,7 +459,7 @@ export function ChatScreen() {
                   <button
                     className="rule-delete"
                     title="remove"
-                    onClick={() => signed(`rule delete #${r.id}`, "rules/delete", { id: r.id })}
+                    onClick={() => change("rules/delete", { id: r.id })}
                     disabled={busy !== null}
                     type="button"
                   >

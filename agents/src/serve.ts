@@ -13,7 +13,7 @@ import { fullRoster, resolve } from "./roster.ts";
 import { createUserAgent } from "./agent-factory.ts";
 import { handleAvailable } from "./identity.ts";
 import { APPROACHES, RESERVED_NAMES, RISKS, deserializeStrategy, serializeStrategy, type Approach } from "./visitor-strategy.ts";
-import { confirmationHash, handleChatMessage, pendingView, reviveAction } from "./chat.ts";
+import { confirmationHash, crossesOperatorRule, handleChatMessage, pendingView, reviveAction } from "./chat.ts";
 import { executeOperatorAction } from "./operator.ts";
 import type { PolicyConflict } from "./policy.ts";
 import { equityOf } from "./equity.ts";
@@ -138,6 +138,29 @@ async function verifyPilotGrant(
   return ok ? null : "pilot signature does not verify";
 }
 
+/**
+ * Who may change this agent, and with which credential.
+ *
+ * Two are accepted and they mean different things. The pilot grant is a
+ * session: one wallet signature, good for the day, already held by the tab
+ * that flies the fleet — so configuring an agent costs no popups. A per-action
+ * signature is the fallback for a tab holding no grant, and it stays the only
+ * thing accepted where a signature is the point rather than the proof: crossing
+ * a limit the operator themselves set (see /chat/confirm).
+ *
+ * Neither credential reaches the hard layer. Contract caps, the operating
+ * reserve, selling more than is held — those refuse a signed request exactly as
+ * they refuse an unsigned one.
+ */
+async function operatorAuth(
+  body: Record<string, unknown>,
+  row: { name: string; owner?: string | null },
+  actionMsg: string,
+): Promise<string | null> {
+  if (body.expiry !== undefined) return verifyPilotGrant(body, row.owner ?? "");
+  return verifyOwnerAction(body, actionMsg, row.name, row.owner ?? "");
+}
+
 /** The operator's agent by handle, or their first. Row is undefined if none. */
 function ownedAgent(owner: string, handle: string): store.UserAgentRow | undefined {
   const mine = owner ? store.userAgentsListByOwner(owner.toLowerCase()) : [];
@@ -147,7 +170,7 @@ function ownedAgent(owner: string, handle: string): store.UserAgentRow | undefin
 
 /**
  * Apply a confirmed change. One implementation serves both paths — the Rules
- * panel signing the exact mutation, and chat confirming an LLM proposal — so
+ * panel naming the exact mutation, and chat confirming an LLM proposal — so
  * there is exactly one place where configuration actually moves.
  */
 function applyChange(row: store.UserAgentRow, type: string, payload: Record<string, unknown>): string {
@@ -480,7 +503,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
-  // Operator controls: per-action wallet signature, no accounts anywhere.
+  // Operator controls: the tab's pilot grant, or a per-action signature when it
+  // holds none. No accounts anywhere either way.
   // `handle` addresses one agent in the fleet; default is the first.
   if (req.method === "POST" && (url.pathname === "/agent/pause" || url.pathname === "/agent/resume")) {
     const body = await readJson(req);
@@ -490,7 +514,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const row = wanted ? mine.find((r) => r.name === wanted) : mine[0];
     if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
     const action = url.pathname === "/agent/pause" ? "pause" : "resume";
-    const err = await verifyOwnerAction(body, action, row.name, row.owner ?? "");
+    const err = await operatorAuth(body, row, action);
     if (err) return json(res, { error: err }, 403);
     store.setPaused(row.name, action === "pause");
     return json(res, { handle: row.name, state: publicState(row) });
@@ -695,8 +719,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, outcome);
   }
 
-  // The signature IS the confirmation: it covers the confirmation id and a
-  // hash of the exact proposal, so what executes is what was shown.
+  /**
+   * Confirm a proposal.
+   *
+   * A proposal that stays inside the operator's own rules is theirs already —
+   * the grant that let them ask for it is the same authority that lets it
+   * happen, so it costs one click and no wallet. A proposal that crosses one of
+   * those rules is the exception the wallet exists for: the signature covers
+   * the confirmation id and a hash of the exact proposal, so what executes is
+   * what was shown, and the override is recorded against a fresh signature
+   * rather than a day-old session.
+   */
   if (req.method === "POST" && url.pathname === "/chat/confirm") {
     const body = await readJson(req);
     const row = ownedAgent(String(body.owner ?? ""), String(body.handle ?? ""));
@@ -707,7 +740,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, { error: "that proposal is gone — it expired or was replaced" }, 409);
     }
     const hash = confirmationHash(active.payload, active.summary);
-    const err = await verifyOwnerAction(body, `confirm #${id} ${hash}`, row.name, row.owner ?? "");
+    const crossesARule = crossesOperatorRule(active);
+    if (crossesARule && body.expiry !== undefined) {
+      // A grant is a session, and an override is not a session-level act.
+      return json(res, { error: "this crosses a rule you set — confirm it with a signature" }, 403);
+    }
+    const err = crossesARule
+      ? await verifyOwnerAction(body, `confirm #${id} ${hash}`, row.name, row.owner ?? "")
+      : await operatorAuth(body, row, `confirm #${id} ${hash}`);
     if (err) return json(res, { error: err }, 403);
     const consumed = store.confirmationConsume(row.name, id);
     if (!consumed) return json(res, { error: "already handled" }, 409);
@@ -767,7 +807,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
-  // Panel mutations: the wallet signs the exact mutation, no LLM in the path.
+  // Panel mutations: no LLM in the path, and no signature either — a rule is
+  // the operator writing down their own constraint, and charging a wallet popup
+  // for that taught them to keep the list short instead of keeping it true.
+  // The fallback message is still accepted so a tab without a grant can sign.
   if (req.method === "POST" && url.pathname.startsWith("/rules/")) {
     const body = await readJson(req);
     const row = ownedAgent(String(body.owner ?? ""), String(body.handle ?? ""));
@@ -790,7 +833,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     } else {
       return json(res, { error: "not found" }, 404);
     }
-    const err = await verifyOwnerAction(body, actionMsg, row.name, row.owner ?? "");
+    const err = await operatorAuth(body, row, actionMsg);
     if (err) return json(res, { error: err }, 403);
     try {
       return json(res, { result: applyChange(row, type, payload) });
@@ -808,7 +851,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!["mandate", "approach", "risk"].includes(field)) return json(res, { error: "unknown field" }, 400);
     const actionMsg =
       field === "mandate" ? `set mandate ${confirmationHash(value, value)}` : `set ${field} ${value.toLowerCase()}`;
-    const err = await verifyOwnerAction(body, actionMsg, row.name, row.owner ?? "");
+    const err = await operatorAuth(body, row, actionMsg);
     if (err) return json(res, { error: err }, 403);
     try {
       const payload =

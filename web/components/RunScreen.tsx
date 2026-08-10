@@ -186,6 +186,14 @@ export function RunScreen() {
     }
   };
 
+  /**
+   * Stop or start the agent.
+   *
+   * The pilot grant already proves this wallet today, so a tab that is flying
+   * the fleet does this without a popup. A tab holding no grant falls back to
+   * signing the action itself — stopping your own agent must never be gated
+   * behind starting the pilot first.
+   */
   const control = async (action: "pause" | "resume") => {
     if (!account || !data?.agent) return;
     setError(null);
@@ -193,11 +201,14 @@ export function RunScreen() {
     try {
       const ts = Date.now();
       const handle = data.agent.handle;
-      const signature = await signMessage(account, `Smiths Run: ${action} @${handle} ${ts}`);
+      const held = loadGrant(account);
+      const auth = held
+        ? { expiry: held.expiry, signature: held.signature }
+        : { ts, signature: await signMessage(account, `Smiths Run: ${action} @${handle} ${ts}`) };
       const res = await fetch(`/api/runs/agent/${action}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: account, handle, signature, ts }),
+        body: JSON.stringify({ owner: account, handle, ...auth }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? `${action} failed`);

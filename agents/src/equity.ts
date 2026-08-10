@@ -43,10 +43,12 @@ export interface Equity {
   claimableCreatorFees: bigint;
   positionValueUsdc: bigint;
   total: bigint;
+  /** Liquidation value per market id, so callers reuse these quotes. */
+  positionValues: Map<string, bigint | null>;
 }
 
 export async function equityOf(agentName: string, address: `0x${string}`): Promise<Equity> {
-  const [walletUsdc, gatewayUsdc, claimableCreatorFees, positionValueUsdc] = await Promise.all([
+  const [walletUsdc, gatewayUsdc, claimableCreatorFees, positions] = await Promise.all([
     obs.walletUsdc(address),
     gatewayAvailable(address).catch(() => 0n), // no Gateway account yet reads as an error
     claimableFees(address),
@@ -57,45 +59,47 @@ export async function equityOf(agentName: string, address: `0x${string}`): Promi
     walletUsdc,
     gatewayUsdc,
     claimableCreatorFees,
-    positionValueUsdc,
-    total: walletUsdc + gatewayUsdc + claimableCreatorFees + positionValueUsdc,
+    positionValueUsdc: positions.total,
+    total: walletUsdc + gatewayUsdc + claimableCreatorFees + positions.total,
+    positionValues: positions.each,
   };
 }
 
-/** Creator fees the agent has earned across every market it created. */
+/**
+ * Creator fees the agent has earned across every market it created.
+ *
+ * Only a market's creator can have fees on it, and who created what is already
+ * in the cached registry — so this asks about the agent's own markets and no
+ * others. Walking all of them here, twice per run and again on every screen
+ * poll, was a second copy of a flood already fixed elsewhere.
+ */
 async function claimableFees(address: `0x${string}`): Promise<bigint> {
-  const count = await obs.pub.readContract({
-    address: MARKETS as `0x${string}`,
-    abi: marketsAbi,
-    functionName: "marketCount",
-  });
-
-  let total = 0n;
-  for (let i = 0n; i < count; i++) {
-    const [, creator, , , creatorFees] = await obs.pub.readContract({
-      address: MARKETS as `0x${string}`,
-      abi: marketsAbi,
-      functionName: "markets",
-      args: [i],
-    });
-    if (creator.toLowerCase() === address.toLowerCase()) total += creatorFees;
-  }
-  return total;
+  const fees = await obs.claimableFees(address);
+  return fees.reduce((sum, f) => sum + f.amount, 0n);
 }
 
-/** What every position would fetch if sold now, impact included. */
-async function positionLiquidationValue(agentName: string): Promise<bigint> {
+/**
+ * What every position would fetch if sold now, impact included — and what each
+ * one would fetch individually, since callers that show positions need exactly
+ * the same quotes and should not pay for them twice.
+ */
+async function positionLiquidationValue(
+  agentName: string,
+): Promise<{ total: bigint; each: Map<string, bigint | null> }> {
   let total = 0n;
+  const each = new Map<string, bigint | null>();
   for (const pos of store.positionsOf(agentName)) {
     if (pos.tokens <= 0n) continue;
     try {
       const { usdcOut } = await obs.quoteSell(pos.marketId, pos.tokens);
       total += usdcOut;
+      each.set(pos.marketId.toString(), usdcOut);
     } catch {
       // A market that cannot be quoted contributes nothing rather than a guess.
+      each.set(pos.marketId.toString(), null);
     }
   }
-  return total;
+  return { total, each };
 }
 
 export function formatEquity(e: Equity): string {

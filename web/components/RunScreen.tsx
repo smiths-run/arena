@@ -87,7 +87,9 @@ export function RunScreen() {
   useEffect(() => {
     if (!account) return;
     refresh(account, selected);
-    const t = setInterval(() => refresh(account, selected), 5000);
+    // Every poll costs an equity snapshot and a quote per position on the
+    // other side. Ten seconds is still live and asks a fifth as much.
+    const t = setInterval(() => refresh(account, selected), 10_000);
     return () => clearInterval(t);
   }, [account, selected, refresh]);
 

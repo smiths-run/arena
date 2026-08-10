@@ -103,7 +103,7 @@ async function balanceOf(address: string): Promise<string | null> {
  * difference between a live screen and no screen.
  */
 const answers = new Map<string, { at: number; value: unknown }>();
-const ANSWER_TTL_MS = 8_000;
+const ANSWER_TTL_MS = 20_000;
 
 async function cached<T>(key: string, make: () => Promise<T>): Promise<T> {
   const hit = answers.get(key);
@@ -223,15 +223,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         equity = null;
       }
 
+      // The equity snapshot already quoted every position; quoting them again
+      // here doubled the chain reads behind the slowest screen on the site.
       const held: Array<{ marketId: string; tokens: string; costUsdc: string; valueUsdc: string | null }> = [];
       for (const p of store.positionsOf(row.name)) {
         if (p.tokens <= 0n) continue;
-        let value: bigint | null = null;
-        try {
-          value = (await obs.quoteSell(p.marketId, p.tokens)).usdcOut;
-        } catch {
-          value = null;
-        }
+        const value = equity?.positionValues.get(p.marketId.toString()) ?? null;
         held.push({
           marketId: p.marketId.toString(),
           tokens: p.tokens.toString(),

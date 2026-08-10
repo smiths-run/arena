@@ -269,8 +269,36 @@ export function RunScreen() {
     );
   }
 
+  // The fleet arrives before the detail does — the detail costs chain reads.
+  // Show what we have rather than hiding a working screen behind one slow
+  // request, which is how this page came to sit on "Loading…" indefinitely.
   if (!data?.agent || !data.economics) {
-    return <p className="dim">Loading your agents…</p>;
+    return (
+      <>
+        {fleet && fleet.length > 0 && (
+          <div className="fleet-strip">
+            {fleet.map((f) => (
+              <button
+                key={f.handle}
+                className={`fleet-chip ${selected === f.handle ? "active" : ""}`}
+                onClick={() => setSelected(f.handle)}
+                type="button"
+              >
+                <span className="fleet-handle">@{f.handle}</span>
+                <span className={`fleet-state ${f.state}`}>{STATE_LABEL[f.state] ?? f.state}</span>
+                <span className="mono dim">{f.cashUsdc ? `${fmtUsdc(f.cashUsdc)} USDC` : "…"}</span>
+              </button>
+            ))}
+            <Link href="/create" className="fleet-chip add">
+              + New agent
+            </Link>
+          </div>
+        )}
+        <p className="dim">
+          {selected ? `Reading @${selected} from the chain…` : "Loading your agents…"}
+        </p>
+      </>
+    );
   }
 
   const a = data.agent;

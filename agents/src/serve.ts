@@ -92,6 +92,27 @@ async function balanceOf(address: string): Promise<string | null> {
   return v;
 }
 
+/**
+ * A short memory for answers that cost chain reads.
+ *
+ * The Run screen polls every few seconds, per agent, and each answer needs an
+ * equity snapshot and a quote per position. Those reads are paced — the
+ * endpoints rate-limit per caller — so without this the requests queued faster
+ * than they drained and the screen sat on "Loading your agents…" forever while
+ * every request waited behind the last. Serving a few-second-old answer is the
+ * difference between a live screen and no screen.
+ */
+const answers = new Map<string, { at: number; value: unknown }>();
+const ANSWER_TTL_MS = 8_000;
+
+async function cached<T>(key: string, make: () => Promise<T>): Promise<T> {
+  const hit = answers.get(key);
+  if (hit && Date.now() - hit.at < ANSWER_TTL_MS) return hit.value as T;
+  const value = await make();
+  answers.set(key, { at: Date.now(), value });
+  return value;
+}
+
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -191,29 +212,38 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const entry = resolve(row.name);
     if (!entry) return json(res, { exists: false });
 
-    let equity: Awaited<ReturnType<typeof equityOf>> | null = null;
-    try {
-      equity = await equityOf(row.name, row.address as `0x${string}`);
-    } catch {
-      equity = null;
-    }
-
-    const positions = [];
-    for (const p of store.positionsOf(row.name)) {
-      if (p.tokens <= 0n) continue;
-      let value: bigint | null = null;
+    // The chain reads for this agent, memoised for a few seconds. The screen
+    // polls faster than these can be fetched, and a queue that grows forever
+    // is a screen that never loads.
+    const priced = await cached(`overview:${row.name}`, async () => {
+      let equity: Awaited<ReturnType<typeof equityOf>> | null = null;
       try {
-        value = (await obs.quoteSell(p.marketId, p.tokens)).usdcOut;
+        equity = await equityOf(row.name, row.address as `0x${string}`);
       } catch {
-        value = null;
+        equity = null;
       }
-      positions.push({
-        marketId: p.marketId.toString(),
-        tokens: p.tokens.toString(),
-        costUsdc: p.costUsdc.toString(),
-        valueUsdc: value?.toString() ?? null,
-      });
-    }
+
+      const held: Array<{ marketId: string; tokens: string; costUsdc: string; valueUsdc: string | null }> = [];
+      for (const p of store.positionsOf(row.name)) {
+        if (p.tokens <= 0n) continue;
+        let value: bigint | null = null;
+        try {
+          value = (await obs.quoteSell(p.marketId, p.tokens)).usdcOut;
+        } catch {
+          value = null;
+        }
+        held.push({
+          marketId: p.marketId.toString(),
+          tokens: p.tokens.toString(),
+          costUsdc: p.costUsdc.toString(),
+          valueUsdc: value?.toString() ?? null,
+        });
+      }
+      return { equity, held };
+    });
+
+    const equity = priced.equity;
+    const positions = priced.held;
 
     const decisions = (store.db
       .prepare("SELECT * FROM runs WHERE agent = ? ORDER BY id DESC LIMIT 12")

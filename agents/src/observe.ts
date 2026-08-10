@@ -66,16 +66,37 @@ const RETRY_PAUSE_MS = 600;
  * be. Paced, a run takes a second or two longer and lands.
  */
 const MIN_GAP_MS = 200;
+
+/**
+ * How long a caller may be made to wait in line before we refuse instead.
+ *
+ * A paced queue with no bound is a service that hangs: when requests arrive
+ * faster than the queue drains, latency grows without limit and a web request
+ * simply never returns — which is exactly how the Run screen came to sit on
+ * "Loading your agents…" indefinitely. Refusing quickly is kinder than waiting
+ * forever: the caller keeps its last snapshot and tries again.
+ */
+const MAX_QUEUE_WAIT_MS = 6_000;
+
 let queue: Promise<unknown> = Promise.resolve();
 let lastSentAt = 0;
+let waiting = 0;
 
 /** One request at a time, no faster than the endpoints will answer. */
 function paced<T>(send: () => Promise<T>): Promise<T> {
+  if (waiting * MIN_GAP_MS > MAX_QUEUE_WAIT_MS) {
+    return Promise.reject(new Error("rpc queue is saturated — try again shortly"));
+  }
+  waiting++;
   const run = queue.then(async () => {
     const wait = lastSentAt + MIN_GAP_MS - Date.now();
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     lastSentAt = Date.now();
-    return send();
+    try {
+      return await send();
+    } finally {
+      waiting--;
+    }
   });
   // The queue must survive a failure, or one error stalls every later call.
   queue = run.then(

@@ -311,6 +311,14 @@ function applyChange(row: store.UserAgentRow, type: string, payload: Record<stri
     store.userAgentSetStrategy(row.name, serializeStrategy(strategy));
     return `risk is now ${v}`;
   }
+  if (type === "trigger_add") {
+    // The payload is the plan the operator confirmed, hashed into their
+    // signature when it carried an override — so it is stored as agreed rather
+    // than re-planned here, where the world may have moved on.
+    const plan = payload as unknown as Parameters<typeof createTrigger>[1];
+    const id = createTrigger(row.name, plan);
+    return `trigger #${id} is live: ${describePlan(plan)}`;
+  }
   throw new Error(`unknown change type ${type}`);
 }
 
@@ -924,7 +932,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
               ? `refused — ${r.detail}`
               : `failed — ${r.detail}`;
       } else {
-        result = applyChange(row, consumed.type, JSON.parse(consumed.payload) as Record<string, unknown>);
+        result = applyChange(
+          row,
+          consumed.type,
+          JSON.parse(consumed.payload, (_k, v) =>
+            typeof v === "string" && /^\d+n$/.test(v) ? BigInt(v.slice(0, -1)) : v,
+          ) as Record<string, unknown>,
+        );
       }
     } catch (e) {
       result = `failed — ${e instanceof Error ? e.message : String(e)}`;

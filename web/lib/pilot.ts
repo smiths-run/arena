@@ -62,6 +62,21 @@ export interface TickResult {
 }
 
 /**
+ * The grant, carried on a private read.
+ *
+ * Headers rather than query parameters: a credential in a URL ends up in
+ * server logs and browser history, and the things these headers unlock — the
+ * conversation, the rules, who the agent follows — are the operator's alone.
+ */
+export function grantHeaders(owner: Address, grant: PilotGrant): Record<string, string> {
+  return {
+    "x-smiths-owner": owner,
+    "x-smiths-expiry": String(grant.expiry),
+    "x-smiths-signature": grant.signature,
+  };
+}
+
+/**
  * "I am still here, and did anything happen?"
  *
  * This is the whole of what keeps a visitor agent reachable by an event. While

@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Address } from "viem";
 import { connectWallet, onAccountsChanged, restoreWallet, signMessage } from "@/lib/wallet";
-import { createGrant, loadGrant, type PilotGrant } from "@/lib/pilot";
+import { createGrant, grantHeaders, loadGrant, type PilotGrant } from "@/lib/pilot";
 import type {
   AgentRule,
   AgentTrigger,
@@ -44,6 +44,7 @@ export function ChatScreen() {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState<PendingConfirmation | null>(null);
+  const [locked, setLocked] = useState(false);
   const [rules, setRules] = useState<AgentRule[]>([]);
   const [triggers, setTriggers] = useState<AgentTrigger[]>([]);
   const [fires, setFires] = useState<TriggerFire[]>([]);
@@ -74,6 +75,15 @@ export function ChatScreen() {
   }, []);
   useEffect(() => onAccountsChanged((a) => setAccount(a)), []);
 
+  /**
+   * Load the fleet, and — once the wallet has proved itself — this agent's
+   * private side.
+   *
+   * The fleet is public: it is the same information the agents directory
+   * publishes. The conversation, the rules and who the agent follows are not,
+   * and the server will not hand them over without the grant, so a session
+   * that has not signed one is shown a lock rather than an empty page.
+   */
   const refresh = useCallback(async (owner: Address, handle: string | null) => {
     const listRes = await fetch(`/api/runs/my/agents?owner=${owner}`, { cache: "no-store" });
     const list = ((await listRes.json()).agents ?? []) as MyAgent[];
@@ -81,11 +91,22 @@ export function ChatScreen() {
     const active = handle && list.some((a) => a.handle === handle) ? handle : (list[0]?.handle ?? null);
     setSelected(active);
     if (!active) return;
-    const [h, r, t] = await Promise.all([
-      fetch(`/api/runs/chat/history?owner=${owner}&handle=${active}`, { cache: "no-store" }).then((x) => x.json()),
-      fetch(`/api/runs/rules?owner=${owner}&handle=${active}`, { cache: "no-store" }).then((x) => x.json()),
-      fetch(`/api/runs/triggers?owner=${owner}&handle=${active}`, { cache: "no-store" }).then((x) => x.json()),
-    ]);
+
+    const held = loadGrant(owner);
+    if (!held) {
+      setLocked(true);
+      setMessages([]);
+      setPending(null);
+      setRules([]);
+      setTriggers([]);
+      setFires([]);
+      return;
+    }
+    setLocked(false);
+    const headers = grantHeaders(owner, held);
+    const read = (path: string) =>
+      fetch(`/api/runs/${path}?handle=${active}`, { cache: "no-store", headers }).then((x) => x.json());
+    const [h, r, t] = await Promise.all([read("chat/history"), read("rules"), read("triggers")]);
     setMessages((h.messages ?? []) as ChatMessage[]);
     setPending((h.pending ?? null) as PendingConfirmation | null);
     setRules((r.rules ?? []) as AgentRule[]);
@@ -102,6 +123,20 @@ export function ChatScreen() {
   useEffect(() => {
     thread.current?.scrollTo({ top: thread.current.scrollHeight });
   }, [messages, pending]);
+
+  const unlock = async () => {
+    if (!account) return;
+    setError(null);
+    setBusy("waiting for your signature…");
+    try {
+      await ensureGrant();
+      await refresh(account, selected);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const ensureGrant = async (): Promise<PilotGrant> => {
     if (!account) throw new Error("no wallet");
@@ -315,10 +350,34 @@ export function ChatScreen() {
         </div>
       )}
 
+      {locked && (
+        <div className="card confirm-card">
+          <div className="confirm-title">This conversation is private</div>
+          <div className="confirm-summary">
+            Your agents are listed publicly, and so is the wallet that owns them — so the server
+            will not hand over what you and @{selected} said to each other without proof that the
+            wallet is yours.
+          </div>
+          <div className="trade-row">
+            <button className="btn primary" onClick={unlock} disabled={busy !== null}>
+              {busy ?? "Unlock with your wallet"}
+            </button>
+            <span className="dim" style={{ fontSize: 12 }}>
+              One signature, good for 24 hours — the same pilot grant that flies your agents.
+            </span>
+          </div>
+        </div>
+      )}
+
       <div className="chat-columns">
         <section className="chat-main">
           <div className="chat-thread card" ref={thread}>
-            {messages.length === 0 && (
+            {locked && (
+              <p className="dim" style={{ fontSize: 13.5 }}>
+                Locked. Sign in above to read this conversation.
+              </p>
+            )}
+            {!locked && messages.length === 0 && (
               <p className="dim" style={{ fontSize: 13.5 }}>
                 This is a private line to @{selected}. Ask what it holds, why it acted, what it
                 thinks — or tell it what to do. Anything that moves money comes back as a proposal

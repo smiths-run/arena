@@ -142,6 +142,45 @@ async function verifyPilotGrant(
 }
 
 /**
+ * The pilot grant, carried on a read.
+ *
+ * A credential does not belong in a URL: query strings land in server logs,
+ * browser history and referrers, so the grant rides headers instead. The owner
+ * comes from the header rather than from the query string, which means the
+ * address a caller claims and the address they can prove are the same value —
+ * there is nothing to disagree about.
+ */
+async function verifyGrantHeader(
+  req: IncomingMessage,
+): Promise<{ owner: string } | { error: string }> {
+  const owner = String(req.headers["x-smiths-owner"] ?? "").toLowerCase();
+  const expiry = Number(req.headers["x-smiths-expiry"] ?? 0);
+  const signature = String(req.headers["x-smiths-signature"] ?? "");
+  if (!owner || !signature) return { error: "this is private — sign in with your wallet" };
+  const err = await verifyPilotGrant({ owner, expiry, signature }, owner);
+  return err ? { error: err } : { owner };
+}
+
+/**
+ * An agent this caller has proved they own.
+ *
+ * Everything private to an operator goes through here. The alternative — an
+ * owner address in the query string and no proof — is not access control at
+ * all: the roster publishes every agent's owner, so anyone could have read
+ * anyone's private conversation by copying an address off a public page.
+ */
+async function provenAgent(
+  req: IncomingMessage,
+  handle: string,
+): Promise<{ row: store.UserAgentRow } | { error: string; status: number }> {
+  const auth = await verifyGrantHeader(req);
+  if ("error" in auth) return { error: auth.error, status: 403 };
+  const row = ownedAgent(auth.owner, handle);
+  if (!row) return { error: "this wallet controls no such agent", status: 404 };
+  return { row };
+}
+
+/**
  * Who may change this agent, and with which credential.
  *
  * Two are accepted and they mean different things. The pilot grant is a
@@ -851,10 +890,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   // ── the living-agent surface: chat, rules, confirmations ──────────────────
 
+  // A conversation between an operator and their agent is private, and the
+  // roster publishes every agent's owner — so knowing an address must not be
+  // enough to read one. Proof of the wallet is.
   if (req.method === "GET" && url.pathname === "/chat/history") {
-    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
-    const row = ownedAgent(owner, url.searchParams.get("handle") ?? "");
-    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const proven = await provenAgent(req, url.searchParams.get("handle") ?? "");
+    if ("error" in proven) return json(res, { error: proven.error }, proven.status);
+    const row = proven.row;
     const active = store.confirmationActive(row.name);
     return json(res, {
       messages: store.chatHistory(row.name, 40),
@@ -985,10 +1027,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   // An agent's triggers, and what they have actually done.
+  // Who an agent follows is private for a reason beyond privacy: a follower's
+  // reaction is predictable, so publishing the relationship would let the
+  // followed agent trade against it.
   if (req.method === "GET" && url.pathname === "/triggers") {
-    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
-    const row = ownedAgent(owner, url.searchParams.get("handle") ?? "");
-    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const proven = await provenAgent(req, url.searchParams.get("handle") ?? "");
+    if ("error" in proven) return json(res, { error: proven.error }, proven.status);
+    const row = proven.row;
     return json(res, {
       triggers: store.triggersOf(row.name).map((t) => triggerJson(t)),
       recentFires: store.firesOf(row.name, 20).map(fireJson),
@@ -1048,10 +1093,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, { error: "not found" }, 404);
   }
 
+  // An operator's rules are how they told their agent to behave — their
+  // working strategy, not a published one.
   if (req.method === "GET" && url.pathname === "/rules") {
-    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
-    const row = ownedAgent(owner, url.searchParams.get("handle") ?? "");
-    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const proven = await provenAgent(req, url.searchParams.get("handle") ?? "");
+    if ("error" in proven) return json(res, { error: proven.error }, proven.status);
+    const row = proven.row;
     return json(res, {
       rules: store.rulesOf(row.name).map((r) => ({
         id: r.id,

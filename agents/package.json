@@ -15,7 +15,8 @@
     "serve": "node src/serve.ts",
     "mission": "node src/mission.ts",
     "analyst": "node src/analyst.ts",
-    "verify": "node src/verify-receipt.ts"
+    "verify": "node src/verify-receipt.ts",
+    "check:privacy": "node src/privacy-check.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

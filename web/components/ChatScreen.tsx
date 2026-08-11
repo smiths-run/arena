@@ -18,6 +18,7 @@ import Link from "next/link";
 import type { Address } from "viem";
 import { connectWallet, onAccountsChanged, restoreWallet, signMessage } from "@/lib/wallet";
 import { createGrant, grantHeaders, loadGrant, type PilotGrant } from "@/lib/pilot";
+import { usePilot } from "@/lib/usePilot";
 import type {
   AgentRule,
   AgentTrigger,
@@ -123,6 +124,24 @@ export function ChatScreen() {
   useEffect(() => {
     thread.current?.scrollTo({ top: thread.current.scrollHeight });
   }, [messages, pending]);
+
+  /**
+   * Talking to your agent is being present with it.
+   *
+   * Without this, an operator sitting in this conversation had a fleet the
+   * server considered asleep: a rule they had just written would record the
+   * next event as missed while they watched. The same loop the Run screen uses
+   * runs here, so the agent is reachable from wherever its operator is.
+   */
+  usePilot({
+    account,
+    grant,
+    fleet,
+    onRan: () => {
+      if (account) refresh(account, selected).catch(() => {});
+    },
+    onGrantLost: () => setGrant(null),
+  });
 
   const unlock = async () => {
     if (!account) return;

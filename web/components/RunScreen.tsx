@@ -12,7 +12,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Address } from "viem";
 import { connectWallet, onAccountsChanged, restoreWallet, sendUsdc, signMessage } from "@/lib/wallet";
-import { createGrant, dropGrant, heartbeat, loadGrant, tick, type PilotGrant } from "@/lib/pilot";
+import { createGrant, dropGrant, loadGrant, type PilotGrant } from "@/lib/pilot";
+import { usePilot } from "@/lib/usePilot";
 import { short, signedUsdc, usdc as fmtUsdc, EXPLORER, type MyAgent, type RunOverview } from "@/lib/api";
 
 const APPROACH_LABEL: Record<string, string> = {
@@ -123,60 +124,20 @@ export function RunScreen() {
     if (account) setGrant(loadGrant(account));
   }, [account]);
 
-  // The tick loop. The server is the authority on cooldowns — a tick that
-  // lands early just comes back with "cooldown" and when to try again, so
-  // two tabs or a clock drift can never double-run an agent.
-  useEffect(() => {
-    if (!account || !grant) return;
-    let stopped = false;
-    const fly = async () => {
-      if (stopped) return;
-      const running = (fleetRef.current ?? []).filter((f) => f.state === "running");
-
-      // Say we are here, and find out whether anything happened that one of
-      // these agents follows. An agent with work waiting jumps its cooldown:
-      // it is answering something, not starting something.
-      let waiting: string[] = [];
-      try {
-        waiting = (await heartbeat(account, grant)).agents;
-        for (const handle of waiting) nextTickAt.current[handle] = 0;
-      } catch {
-        dropGrant(account);
-        setGrant(null);
-        setPilotNote("Pilot grant expired — sign again to keep your agents flying.");
-        return;
-      }
-
-      for (const f of running) {
-        if ((nextTickAt.current[f.handle] ?? 0) > Date.now()) continue;
-        try {
-          const r = await tick(account, f.handle, grant);
-          if (r.nextInSeconds) {
-            nextTickAt.current[f.handle] = Date.now() + r.nextInSeconds * 1000;
-          } else {
-            nextTickAt.current[f.handle] = Date.now() + 20_000;
-          }
-          if (r.ran) refresh(account, selected);
-        } catch {
-          // A rejected grant means it lapsed — land the fleet and ask for a
-          // fresh signature instead of hammering the server.
-          dropGrant(account);
-          setGrant(null);
-          setPilotNote("Pilot grant expired — sign again to keep your agents flying.");
-          return;
-        }
-      }
-    };
-    fly();
-    // Three seconds is the heartbeat, not the run cadence: the server still
-    // owns the cooldown and answers "not yet" for pennies. What this buys is
-    // the gap between another agent acting and this one hearing about it.
-    const t = setInterval(fly, 3_000);
-    return () => {
-      stopped = true;
-      clearInterval(t);
-    };
-  }, [account, grant, refresh, selected]);
+  // Flying the fleet lives in one place now, shared with the Chat screen: an
+  // operator is present on either, and their agents should be reachable from
+  // both. See lib/usePilot.
+  usePilot({
+    account,
+    grant,
+    fleet,
+    onRan: () => refresh(account!, selected),
+    onGrantLost: () => {
+      if (account) dropGrant(account);
+      setGrant(null);
+      setPilotNote("Pilot grant expired — sign again to keep your agents flying.");
+    },
+  });
 
   const startPilot = async () => {
     if (!account) return;

@@ -180,7 +180,8 @@ export interface ChainTrade {
   traderHandle: string | null;
   side: "buy" | "sell";
   usdc: string;
-  impactBps: string;
+  /** When the block carrying it was mined, in unix ms. */
+  at: number;
   txHash: string;
   logIndex: number;
   blockNumber: string;
@@ -297,6 +298,23 @@ export function signedUsdc(base: string | null | undefined): string {
 
 export function bps(v: string): string {
   return `${(Number(v) / 100).toFixed(2)}%`;
+}
+
+/**
+ * How long ago, for a reader rather than for a clock.
+ *
+ * A feed that says only what happened invites the question this answers: a
+ * quiet economy and a broken page look identical until the rows carry their
+ * age.
+ */
+export function ago(at: number, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - at) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
 }
 
 export const EXPLORER = "https://testnet.arcscan.app";

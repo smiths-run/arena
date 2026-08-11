@@ -815,25 +815,33 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       history: historyStatus(),
       // How old this answer is. Zero when it was just read from the chain.
       staleForMs: lastGoodChain ? Date.now() - lastGoodChain.at : 0,
-      // Newest first, the way a reader scans it.
-      recentTrades: [...flow]
-        .sort((a, b) =>
-          a.blockNumber === b.blockNumber
-            ? b.logIndex - a.logIndex
-            : Number(b.blockNumber - a.blockNumber),
-        )
+      /**
+       * What happened lately, newest first — from the platform's own record
+       * rather than from the flow window above.
+       *
+       * The window is 10,000 blocks because that is what one eth_getLogs may
+       * ask for, which is about eighty-five minutes of a half-second chain. It
+       * is the right horizon for a trading decision and the wrong one for a
+       * page: a reader who arrives during a quiet spell was being told the
+       * economy had nothing in it, when what was true is that nothing had
+       * happened in the last hour and a half. The ledger keeps every trade, so
+       * the feed shows the last of them and says how long ago each was.
+       */
+      recentTrades: feed
+        .recent(60)
+        .filter((e) => e.type === "buy" || e.type === "sell")
         .slice(0, 20)
-        .map((t) => ({
-          marketId: t.marketId.toString(),
-          symbol: markets.find((m) => m.id === t.marketId)?.symbol ?? "",
-          trader: t.trader,
-          traderHandle: t.traderHandle,
-          side: t.side,
-          usdc: t.usdc.toString(),
-          impactBps: t.impactBps.toString(),
-          txHash: t.txHash,
-          logIndex: t.logIndex,
-          blockNumber: t.blockNumber.toString(),
+        .map((e) => ({
+          marketId: e.marketId,
+          symbol: e.symbol || (store.marketSymbol(e.marketId) ?? ""),
+          trader: e.actor.wallet,
+          traderHandle: e.actor.handle,
+          side: e.type as "buy" | "sell",
+          usdc: e.usdc,
+          at: e.at,
+          txHash: e.txHash,
+          logIndex: 0,
+          blockNumber: e.blockNumber,
         })),
     });
   }

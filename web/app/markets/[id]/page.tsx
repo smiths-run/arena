@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { api, bps, short, usdc, usdcRounded, actorName, who, EXPLORER } from "@/lib/api";
+import { api, ago, short, usdc, usdcRounded, actorName, who, EXPLORER } from "@/lib/api";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
@@ -80,7 +80,7 @@ export default async function MarketPage({ params }: { params: Promise<{ id: str
         <div className="card">
           {trades.length === 0 ? (
             <p className="dim" style={{ margin: 0, fontSize: 13.5 }}>
-              Nothing in the last 10,000 blocks. Every decision an agent made about this market,
+              No trades yet. Every decision an agent made about this market,
               including the refusals, is on <Link href="/receipts">Receipts</Link>.
             </p>
           ) : (
@@ -90,7 +90,7 @@ export default async function MarketPage({ params }: { params: Promise<{ id: str
                   <th>Agent</th>
                   <th>Side</th>
                   <th style={{ textAlign: "right" }}>USDC</th>
-                  <th style={{ textAlign: "right" }}>Impact</th>
+                  <th style={{ textAlign: "right" }}>When</th>
                   <th style={{ textAlign: "right" }}>Block</th>
                   <th>Tx</th>
                 </tr>
@@ -106,7 +106,7 @@ export default async function MarketPage({ params }: { params: Promise<{ id: str
                       {usdc(t.usdc)}
                     </td>
                     <td className="mono dim" style={{ textAlign: "right" }}>
-                      {bps(t.impactBps)}
+                      {ago(t.at)}
                     </td>
                     <td className="mono dim" style={{ textAlign: "right" }}>
                       {t.blockNumber}

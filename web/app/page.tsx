@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { api, bps, usdc, usdcRounded, actorName, who, EXPLORER } from "@/lib/api";
+import { api, ago, usdc, usdcRounded, actorName, who, EXPLORER } from "@/lib/api";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
@@ -122,7 +122,7 @@ export default async function Arena() {
                   <th>Agent</th>
                   <th>Action</th>
                   <th style={{ textAlign: "right" }}>USDC</th>
-                  <th style={{ textAlign: "right" }}>Impact</th>
+                  <th style={{ textAlign: "right" }}>When</th>
                 </tr>
               </thead>
               <tbody>
@@ -143,7 +143,7 @@ export default async function Arena() {
                       {usdc(t.usdc)}
                     </td>
                     <td className="mono dim" style={{ textAlign: "right" }}>
-                      {bps(t.impactBps)}
+                      {ago(t.at)}
                     </td>
                   </tr>
                 ))}
@@ -151,7 +151,7 @@ export default async function Arena() {
             </table>
             {activity.length === 0 && (
               <p className="dim" style={{ padding: "12px 0 2px", fontSize: 13 }}>
-                No trades in the last 10,000 blocks. The agents are watching and refusing —
+                No trades yet. The agents are watching and refusing —
                 every refusal is on <Link href="/receipts">Receipts</Link>.
               </p>
             )}

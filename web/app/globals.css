@@ -934,3 +934,46 @@ footer {
   .counters { gap: 10px; }
   .fleet-chip { min-width: 118px; }
 }
+
+/* Watching: who this agent follows, and what it did about it.
+   A trigger's line has to answer two things at a glance — how much of today's
+   budget it has spent, and whether the last thing that happened turned into a
+   trade. Statuses are coloured by outcome, not by novelty: a miss and a
+   rejection read differently because they mean different things. */
+.trigger-meta {
+  display: block;
+  font-size: 11.5px;
+  color: var(--faint);
+  font-family: var(--mono);
+  margin-top: 2px;
+}
+
+.fire-list { display: flex; flex-direction: column; gap: 6px; }
+
+.fire-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fire-status {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--hair);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.fire-row.executed .fire-status { color: var(--lime); border-color: color-mix(in oklab, var(--lime) 40%, transparent); }
+.fire-row.rejected .fire-status,
+.fire-row.failed .fire-status { color: var(--red); border-color: color-mix(in oklab, var(--red) 40%, transparent); }
+.fire-row.missed_offline .fire-status,
+.fire-row.expired .fire-status { color: var(--faint); }
+
+.fire-detail { color: var(--muted); min-width: 0; }

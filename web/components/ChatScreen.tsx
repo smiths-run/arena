@@ -18,7 +18,15 @@ import Link from "next/link";
 import type { Address } from "viem";
 import { connectWallet, onAccountsChanged, restoreWallet, signMessage } from "@/lib/wallet";
 import { createGrant, loadGrant, type PilotGrant } from "@/lib/pilot";
-import type { AgentRule, ChatMessage, MyAgent, PendingConfirmation } from "@/lib/api";
+import type {
+  AgentRule,
+  AgentTrigger,
+  ChatMessage,
+  MyAgent,
+  PendingConfirmation,
+  TriggerFire,
+} from "@/lib/api";
+import { usdc as fmtUsdc } from "@/lib/api";
 
 const APPROACH_OPTIONS = ["scout", "momentum", "contrarian", "builder"];
 const RISK_OPTIONS = ["low", "balanced", "high"];
@@ -37,6 +45,8 @@ export function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState<PendingConfirmation | null>(null);
   const [rules, setRules] = useState<AgentRule[]>([]);
+  const [triggers, setTriggers] = useState<AgentTrigger[]>([]);
+  const [fires, setFires] = useState<TriggerFire[]>([]);
   const [meta, setMeta] = useState<{ mandate: string | null; approach: string }>({
     mandate: null,
     approach: "scout",
@@ -71,13 +81,16 @@ export function ChatScreen() {
     const active = handle && list.some((a) => a.handle === handle) ? handle : (list[0]?.handle ?? null);
     setSelected(active);
     if (!active) return;
-    const [h, r] = await Promise.all([
+    const [h, r, t] = await Promise.all([
       fetch(`/api/runs/chat/history?owner=${owner}&handle=${active}`, { cache: "no-store" }).then((x) => x.json()),
       fetch(`/api/runs/rules?owner=${owner}&handle=${active}`, { cache: "no-store" }).then((x) => x.json()),
+      fetch(`/api/runs/triggers?owner=${owner}&handle=${active}`, { cache: "no-store" }).then((x) => x.json()),
     ]);
     setMessages((h.messages ?? []) as ChatMessage[]);
     setPending((h.pending ?? null) as PendingConfirmation | null);
     setRules((r.rules ?? []) as AgentRule[]);
+    setTriggers((t.triggers ?? []) as AgentTrigger[]);
+    setFires((t.recentFires ?? []) as TriggerFire[]);
     setMeta({ mandate: r.mandate ?? null, approach: r.approach ?? "scout" });
   }, []);
 
@@ -482,6 +495,81 @@ export function ChatScreen() {
                 Add
               </button>
             </div>
+          </div>
+
+          <div className="card">
+            <h2 style={{ marginBottom: 8 }}>Watching</h2>
+            {triggers.length === 0 ? (
+              <p className="dim" style={{ fontSize: 13, margin: 0 }}>
+                Not following anyone. Ask in chat — “whenever @someone launches a coin, buy 0.5
+                USDC” — and I react as it happens, while I am awake.
+              </p>
+            ) : (
+              <div className="rule-list">
+                {triggers.map((t) => (
+                  <div key={t.id} className={`rule-row ${t.enabled ? "" : "off"}`}>
+                    <button
+                      className="rule-toggle"
+                      title={t.enabled ? "disable" : "enable"}
+                      onClick={() => change("triggers/toggle", { id: t.id, enabled: !t.enabled })}
+                      disabled={busy !== null}
+                      type="button"
+                    >
+                      {t.enabled ? "✓" : "○"}
+                    </button>
+                    <span className="rule-text">
+                      <strong>@{t.target}</strong>{" "}
+                      <span className="dim">
+                        {t.mode === "watch"
+                          ? "watched"
+                          : t.mode === "mirror"
+                            ? "mirrored"
+                            : "evaluated"}
+                      </span>
+                      <span className="trigger-meta">
+                        {t.mode !== "watch" && (
+                          <>
+                            {fmtUsdc(t.spentTodayUsdc)} / {fmtUsdc(t.dailyBudgetUsdc)} USDC today
+                            {t.overrideRisk ? " · may cross your limits" : ""}
+                          </>
+                        )}
+                        {t.lastFire && (
+                          <>
+                            {t.mode !== "watch" ? " · " : ""}
+                            last: {t.lastFire.status.replace("_", " ")}
+                          </>
+                        )}
+                      </span>
+                    </span>
+                    <button
+                      className="rule-delete"
+                      title="stop following"
+                      onClick={() => change("triggers/delete", { id: t.id })}
+                      disabled={busy !== null}
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {fires.length > 0 && (
+              <>
+                <p className="dim" style={{ fontSize: 11.5, margin: "12px 0 6px" }}>
+                  What they did about it
+                </p>
+                <div className="fire-list">
+                  {fires.slice(0, 6).map((f) => (
+                    <div key={f.id} className={`fire-row ${f.status}`}>
+                      <span className="fire-status">{f.status.replace("_", " ")}</span>
+                      <span className="fire-detail">{f.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </aside>
       </div>

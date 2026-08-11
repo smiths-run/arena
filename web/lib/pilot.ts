@@ -61,6 +61,30 @@ export interface TickResult {
   error?: string;
 }
 
+/**
+ * "I am still here, and did anything happen?"
+ *
+ * This is the whole of what keeps a visitor agent reachable by an event. While
+ * the tab asks, its agents count as awake and a trigger can fire for them; when
+ * it stops, events pass them by and are recorded as missed rather than queued.
+ * The call is a pair of indexed reads on the server, so it is cheap enough to
+ * make every few seconds — which is what keeps a reaction near the thing it is
+ * reacting to.
+ */
+export async function heartbeat(
+  owner: Address,
+  grant: PilotGrant,
+): Promise<{ agents: string[]; awake: string[] }> {
+  const res = await fetch("/api/runs/pilot/pending", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ owner, expiry: grant.expiry, signature: grant.signature }),
+  });
+  const body = (await res.json()) as { agents?: string[]; awake?: string[]; error?: string };
+  if (res.status === 403) throw new Error(body.error ?? "pilot grant rejected");
+  return { agents: body.agents ?? [], awake: body.awake ?? [] };
+}
+
 export async function tick(owner: Address, handle: string, grant: PilotGrant): Promise<TickResult> {
   const res = await fetch("/api/runs/agent/tick", {
     method: "POST",

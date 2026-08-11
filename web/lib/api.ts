@@ -206,6 +206,46 @@ export interface AgentRule {
   enabled: boolean;
 }
 
+/** A standing rule that reacts to another agent as it acts. */
+export interface AgentTrigger {
+  id: number;
+  target: string;
+  event: "market_launched" | "buy" | "sell" | "any";
+  mode: "watch" | "evaluate" | "mirror";
+  sizing: string | null;
+  amountUsdc: string | null;
+  proportionBps: number | null;
+  dailyBudgetUsdc: string;
+  spentTodayUsdc: string;
+  maxActionUsdc: string;
+  overrideRisk: boolean;
+  expiresAt: number | null;
+  enabled: boolean;
+  summary: string;
+  lastFire: TriggerFire | null;
+}
+
+/** What one trigger did about one event — including doing nothing, and why. */
+export interface TriggerFire {
+  id: number;
+  triggerId: number;
+  at: number;
+  handledAt: number | null;
+  status:
+    | "pending"
+    | "running"
+    | "executed"
+    | "skipped"
+    | "rejected"
+    | "failed"
+    | "observed"
+    | "missed_offline"
+    | "expired";
+  detail: string | null;
+  runId: number | null;
+  usdc: string | null;
+}
+
 export const api = {
   chain: () =>
     get<{ markets: ChainMarket[]; recentTrades: ChainTrade[]; history: HistoryStatus }>(

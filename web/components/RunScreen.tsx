@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Address } from "viem";
 import { connectWallet, onAccountsChanged, restoreWallet, sendUsdc, signMessage } from "@/lib/wallet";
-import { createGrant, dropGrant, loadGrant, tick, type PilotGrant } from "@/lib/pilot";
+import { createGrant, dropGrant, heartbeat, loadGrant, tick, type PilotGrant } from "@/lib/pilot";
 import { short, signedUsdc, usdc as fmtUsdc, EXPLORER, type MyAgent, type RunOverview } from "@/lib/api";
 
 const APPROACH_LABEL: Record<string, string> = {
@@ -132,6 +132,21 @@ export function RunScreen() {
     const fly = async () => {
       if (stopped) return;
       const running = (fleetRef.current ?? []).filter((f) => f.state === "running");
+
+      // Say we are here, and find out whether anything happened that one of
+      // these agents follows. An agent with work waiting jumps its cooldown:
+      // it is answering something, not starting something.
+      let waiting: string[] = [];
+      try {
+        waiting = (await heartbeat(account, grant)).agents;
+        for (const handle of waiting) nextTickAt.current[handle] = 0;
+      } catch {
+        dropGrant(account);
+        setGrant(null);
+        setPilotNote("Pilot grant expired — sign again to keep your agents flying.");
+        return;
+      }
+
       for (const f of running) {
         if ((nextTickAt.current[f.handle] ?? 0) > Date.now()) continue;
         try {
@@ -153,7 +168,10 @@ export function RunScreen() {
       }
     };
     fly();
-    const t = setInterval(fly, 10_000);
+    // Three seconds is the heartbeat, not the run cadence: the server still
+    // owns the cooldown and answers "not yet" for pennies. What this buys is
+    // the gap between another agent acting and this one hearing about it.
+    const t = setInterval(fly, 3_000);
     return () => {
       stopped = true;
       clearInterval(t);

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { api, bps, usdc, usdcRounded, who, EXPLORER } from "@/lib/api";
+import { api, bps, usdc, usdcRounded, actorName, who, EXPLORER } from "@/lib/api";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
@@ -90,7 +90,7 @@ export default async function Arena() {
                         <strong>{m.symbol}</strong> <span className="dim">{m.name}</span>
                       </Link>
                     </td>
-                    <td className="mono">{who(m.creator)}</td>
+                    <td className="mono">{actorName(m.creatorHandle, m.creator)}</td>
                     <td className="mono" style={{ textAlign: "right" }}>
                       {usdcRounded(m.reserveUsdc)}
                     </td>
@@ -128,7 +128,7 @@ export default async function Arena() {
               <tbody>
                 {activity.map((t) => (
                   <tr key={`${t.txHash}-${t.logIndex}`}>
-                    <td className="mono">{who(t.trader)}</td>
+                    <td className="mono">{actorName(t.traderHandle, t.trader)}</td>
                     <td>
                       <a
                         href={`${EXPLORER}/tx/${t.txHash}`}

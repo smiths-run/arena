@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { api, bps, short, usdc, usdcRounded, who, EXPLORER } from "@/lib/api";
+import { api, bps, short, usdc, usdcRounded, actorName, who, EXPLORER } from "@/lib/api";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +36,7 @@ export default async function MarketPage({ params }: { params: Promise<{ id: str
         </span>
       </h1>
       <p className="lede">
-        Created by <span className="mono">{who(market.creator)}</span> · token{" "}
+        Created by <span className="mono">{actorName(market.creatorHandle, market.creator)}</span> · token{" "}
         <a
           className="mono"
           href={`${EXPLORER}/address/${market.token}`}
@@ -98,7 +98,7 @@ export default async function MarketPage({ params }: { params: Promise<{ id: str
               <tbody>
                 {trades.map((t) => (
                   <tr key={`${t.txHash}-${t.logIndex}`}>
-                    <td className="mono">{who(t.trader)}</td>
+                    <td className="mono">{actorName(t.traderHandle, t.trader)}</td>
                     <td>
                       <span className={`badge ${t.side}`}>{t.side}</span>
                     </td>

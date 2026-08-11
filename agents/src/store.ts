@@ -1033,21 +1033,52 @@ db.exec(`
     name TEXT NOT NULL DEFAULT ''
   );
 `);
+addColumn("market_facts", "creator", "TEXT");
+
+export interface MarketFactsRow {
+  marketId: string;
+  symbol: string;
+  name: string;
+  creator: string | null;
+}
 
 export function rememberMarkets(
-  markets: Array<{ id: bigint | string; symbol: string; name: string }>,
+  markets: Array<{ id: bigint | string; symbol: string; name: string; creator?: string | null }>,
 ): void {
   const put = db.prepare(
-    `INSERT INTO market_facts (market_id, symbol, name)
-     VALUES (?, ?, ?)
+    `INSERT INTO market_facts (market_id, symbol, name, creator)
+     VALUES (?, ?, ?, ?)
      ON CONFLICT(market_id) DO UPDATE SET
-       symbol = CASE WHEN excluded.symbol <> '' THEN excluded.symbol ELSE market_facts.symbol END,
-       name   = CASE WHEN excluded.name   <> '' THEN excluded.name   ELSE market_facts.name   END`,
+       symbol  = CASE WHEN excluded.symbol  <> '' THEN excluded.symbol  ELSE market_facts.symbol END,
+       name    = CASE WHEN excluded.name    <> '' THEN excluded.name    ELSE market_facts.name   END,
+       creator = COALESCE(excluded.creator, market_facts.creator)`,
   );
   // Row by row on purpose: unlike the history walk, no two of these have to
   // land together, so there is nothing to gain from holding a write lock that
   // three processes are competing for.
-  for (const m of markets) put.run(m.id.toString(), m.symbol ?? "", m.name ?? "");
+  for (const m of markets) {
+    put.run(m.id.toString(), m.symbol ?? "", m.name ?? "", m.creator ? m.creator.toLowerCase() : null);
+  }
+}
+
+/** Who launched a market, by wallet. Null while the chain read has not landed. */
+export function marketCreator(id: bigint | string | number): string | null {
+  const row = db.prepare("SELECT creator FROM market_facts WHERE market_id = ?").get(id.toString()) as
+    | { creator: string | null }
+    | undefined;
+  return row?.creator ?? null;
+}
+
+/** Everything the ledger knows about every market it has seen named. */
+export function marketFacts(): MarketFactsRow[] {
+  return (
+    db.prepare("SELECT market_id, symbol, name, creator FROM market_facts").all() as Array<{
+      market_id: string;
+      symbol: string;
+      name: string;
+      creator: string | null;
+    }>
+  ).map((r) => ({ marketId: r.market_id, symbol: r.symbol, name: r.name, creator: r.creator }));
 }
 
 /** The ticker for one market, or null while the chain read has not landed. */

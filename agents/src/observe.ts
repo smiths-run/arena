@@ -6,6 +6,7 @@
 import { createPublicClient, fallback, http, parseAbi } from "viem";
 import { MARKETS, USDC } from "./shared.ts";
 import * as store from "./store.ts";
+import { actorOf } from "./actors.ts";
 
 const API = process.env.INDEXER_URL ?? "http://localhost:42069";
 
@@ -140,6 +141,8 @@ export interface MarketView {
   id: bigint;
   token: `0x${string}`;
   creator: `0x${string}`;
+  /** The creator's handle when the wallet is an agent we know; null otherwise. */
+  creatorHandle: string | null;
   symbol: string;
   name: string;
   reserveUsdc: bigint;
@@ -150,6 +153,8 @@ export interface MarketView {
 export interface TradeView {
   marketId: bigint;
   trader: `0x${string}`;
+  /** The trader's handle when the wallet is an agent we know; null otherwise. */
+  traderHandle: string | null;
   blockNumber: bigint;
   /** What the trade was. Strategy only counts flow; the site shows the trade. */
   side: "buy" | "sell";
@@ -245,7 +250,9 @@ export async function fetchMarkets(): Promise<MarketView[]> {
     // Share what the chain just told us. The orchestrator holds this map, the
     // API process does not, and both have to call a market by the same name.
     try {
-      store.rememberMarkets([...known.values()]);
+      store.rememberMarkets(
+        [...known.values()].map((m) => ({ id: m.id, symbol: m.symbol, name: m.name, creator: m.creator })),
+      );
     } catch {
       // A naming convenience must never fail a run.
     }
@@ -257,6 +264,7 @@ export async function fetchMarkets(): Promise<MarketView[]> {
     id: m.id,
     token: m.token,
     creator: m.creator,
+    creatorHandle: actorOf(m.creator).handle,
     symbol: m.symbol,
     name: m.name,
     reserveUsdc: reserves.get(m.id.toString()) ?? 0n,
@@ -330,6 +338,7 @@ export async function fetchRecentTrades(): Promise<TradeView[]> {
     .map((l) => ({
       marketId: l.args.id as bigint,
       trader: (l.args.buyer ?? l.args.seller) as `0x${string}`,
+      traderHandle: actorOf(l.args.buyer ?? l.args.seller).handle,
       blockNumber: l.blockNumber,
       side: (l.eventName === "Bought" ? "buy" : "sell") as "buy" | "sell",
       usdc: (l.args.usdcIn ?? l.args.usdcOut ?? 0n) as bigint,

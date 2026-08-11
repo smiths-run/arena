@@ -600,6 +600,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         name: m.name,
         token: m.token,
         creator: m.creator,
+        creatorHandle: m.creatorHandle,
         reserveUsdc: m.reserveUsdc.toString(),
         recentTrades: recentOf.get(m.id.toString()) ?? 0,
         // Lifetime totals, as far as the history walk has read. Null until it
@@ -623,6 +624,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           marketId: t.marketId.toString(),
           symbol: markets.find((m) => m.id === t.marketId)?.symbol ?? "",
           trader: t.trader,
+          traderHandle: t.traderHandle,
           side: t.side,
           usdc: t.usdc.toString(),
           impactBps: t.impactBps.toString(),

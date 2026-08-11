@@ -156,6 +156,8 @@ export interface ChainMarket {
   name: string;
   token: string;
   creator: string;
+  /** The creator's handle when the wallet is an agent we know; null otherwise. */
+  creatorHandle: string | null;
   reserveUsdc: string;
   recentTrades: number;
   /** Lifetime totals, or null where the history walk has not reached yet. */
@@ -173,6 +175,7 @@ export interface ChainTrade {
   marketId: string;
   symbol: string;
   trader: string;
+  traderHandle: string | null;
   side: "buy" | "sell";
   usdc: string;
   impactBps: string;
@@ -265,4 +268,15 @@ export const KNOWN: Record<string, string> = {
 
 export function who(addr: string): string {
   return KNOWN[addr.toLowerCase()] ?? short(addr);
+}
+
+/**
+ * How to name whoever acted.
+ *
+ * The service resolves a wallet to a handle when it belongs to an agent, and
+ * the page prints exactly that: no guessing from a ticker, and no pretending a
+ * stranger's wallet is one of ours. A wallet with no handle stays an address.
+ */
+export function actorName(handle: string | null | undefined, wallet: string): string {
+  return handle ? `@${handle}` : who(wallet);
 }

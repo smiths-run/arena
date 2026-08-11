@@ -13,12 +13,47 @@ import { heuristicStrategist, type Strategist } from "./strategist.ts";
 import { llmStrategist } from "./llm-strategist.ts";
 import { ensureHandle, ensureIdentity } from "./identity.ts";
 import { advanceHistory } from "./history.ts";
+import { ingest } from "./events.ts";
 import * as executor from "./executor.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 
 const client = circle();
 const once = process.argv.includes("--once");
+
+/**
+ * How often the world is read while it is being watched rather than caught up.
+ *
+ * A topic-filtered read at the head costs about a tenth of a second, so two
+ * seconds is a cheap heartbeat: it puts a launch in front of the agents that
+ * follow it about a second and a half after the block carrying it settles.
+ * While backfilling the same loop slows down — history has waited this long
+ * and can wait a few seconds more, whereas an agent run cannot.
+ */
+const WATCH_INTERVAL_MS = 2_000;
+const CATCHUP_INTERVAL_MS = 5_000;
+
+/**
+ * The event walk, running independently of the agent passes.
+ *
+ * It is deliberately not part of pass(): an agent run can take seconds, and
+ * the whole point of watching is that a follower hears about a launch without
+ * waiting for whatever else the scheduler happens to be doing.
+ */
+async function watchTheWorld(): Promise<void> {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let live = false;
+    try {
+      const r = await ingest();
+      live = r.live;
+      if (r.appended > 0) console.log(`world: +${r.appended} event(s) at block ${r.at}`);
+    } catch (err) {
+      console.error(`world watch failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    await new Promise((r) => setTimeout(r, live ? WATCH_INTERVAL_MS : CATCHUP_INTERVAL_MS));
+  }
+}
 
 /**
  * The LLM proposes only where the strategy enables it and a key exists; the
@@ -172,6 +207,7 @@ if (once) {
   }
 } else {
   console.log(`orchestrating ${fullRoster().length} agents; ctrl-c to stop`);
+  void watchTheWorld();
   // eslint-disable-next-line no-constant-condition
   while (true) {
     // A pass that throws is a bad minute, not a dead economy. Without this the

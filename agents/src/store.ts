@@ -1114,6 +1114,195 @@ export function marketHistory(): Array<{ marketId: string; volumeUsdc: string; t
   ).map((r) => ({ marketId: r.market_id, volumeUsdc: r.volume_usdc, tradeCount: r.trade_count }));
 }
 
+/**
+ * Everything that happened on the platform, as one stream.
+ *
+ * A launch, a buy and a sell are different rows in the chain's log and the same
+ * kind of fact to an agent: somebody did something, at a time, in a market. A
+ * rule that watches another agent needs that single shape — and it needs it to
+ * be exactly-once, because the same log re-read after a restart must not buy
+ * the same coin twice. The chain gives us the key for free: a transaction hash
+ * and a log index name one event forever.
+ *
+ * The actor is stored as a wallet and named at read time. An agent that
+ * registers tomorrow should not leave yesterday's events anonymous forever.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS platform_events (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    block_number INTEGER NOT NULL,
+    log_index INTEGER NOT NULL,
+    tx_hash TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    actor_wallet TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    usdc TEXT NOT NULL DEFAULT '0',
+    tokens TEXT NOT NULL DEFAULT '0',
+    symbol TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX IF NOT EXISTS platform_events_actor ON platform_events(actor_wallet, block_number DESC);
+  CREATE INDEX IF NOT EXISTS platform_events_market ON platform_events(market_id, block_number DESC);
+  CREATE INDEX IF NOT EXISTS platform_events_at ON platform_events(at DESC);
+`);
+
+export type PlatformEventType = "market_launched" | "buy" | "sell";
+
+export interface PlatformEventRow {
+  /** Arrival order within this ledger — the matcher's cursor. */
+  seq: number;
+  id: string;
+  type: PlatformEventType;
+  blockNumber: string;
+  logIndex: number;
+  txHash: string;
+  at: number;
+  actorWallet: string;
+  marketId: string;
+  usdc: string;
+  tokens: string;
+  symbol: string;
+  name: string;
+}
+
+const EVENT_COLUMNS =
+  "rowid AS seq, id, type, block_number, log_index, tx_hash, at, actor_wallet, market_id, usdc, tokens, symbol, name";
+
+function toEvent(r: Record<string, unknown>): PlatformEventRow {
+  return {
+    seq: Number(r.seq),
+    id: String(r.id),
+    type: String(r.type) as PlatformEventType,
+    blockNumber: String(r.block_number),
+    logIndex: Number(r.log_index),
+    txHash: String(r.tx_hash),
+    at: Number(r.at),
+    actorWallet: String(r.actor_wallet),
+    marketId: String(r.market_id),
+    usdc: String(r.usdc),
+    tokens: String(r.tokens),
+    symbol: String(r.symbol),
+    name: String(r.name),
+  };
+}
+
+export interface PlatformEventInput {
+  id: string;
+  type: PlatformEventType;
+  blockNumber: bigint;
+  logIndex: number;
+  txHash: string;
+  at: number;
+  actorWallet: string;
+  marketId: bigint | string;
+  usdc?: bigint;
+  tokens?: bigint;
+  symbol?: string;
+  name?: string;
+}
+
+/** Append events, ignoring any the ledger already holds. Returns how many were new. */
+export function eventsAppend(events: PlatformEventInput[]): number {
+  const put = db.prepare(
+    `INSERT OR IGNORE INTO platform_events
+       (id, type, block_number, log_index, tx_hash, at, actor_wallet, market_id, usdc, tokens, symbol, name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  let appended = 0;
+  for (const e of events) {
+    const r = put.run(
+      e.id,
+      e.type,
+      Number(e.blockNumber),
+      e.logIndex,
+      e.txHash.toLowerCase(),
+      e.at,
+      e.actorWallet.toLowerCase(),
+      e.marketId.toString(),
+      (e.usdc ?? 0n).toString(),
+      (e.tokens ?? 0n).toString(),
+      e.symbol ?? "",
+      e.name ?? "",
+    );
+    appended += Number(r.changes ?? 0);
+  }
+  return appended;
+}
+
+/** The newest arrival order in the ledger, for a matcher starting fresh. */
+export function eventsHighWater(): number {
+  const row = db.prepare("SELECT MAX(rowid) n FROM platform_events").get() as { n: number | null };
+  return row.n ?? 0;
+}
+
+/** Events that arrived after a cursor, oldest first — the matcher's feed. */
+export function eventsSince(seq: number, limit = 200): PlatformEventRow[] {
+  return (
+    db
+      .prepare(`SELECT ${EVENT_COLUMNS} FROM platform_events WHERE rowid > ? ORDER BY rowid ASC LIMIT ?`)
+      .all(seq, limit) as Array<Record<string, unknown>>
+  ).map(toEvent);
+}
+
+export function eventsRecent(limit = 50): PlatformEventRow[] {
+  return (
+    db
+      .prepare(`SELECT ${EVENT_COLUMNS} FROM platform_events ORDER BY block_number DESC, log_index DESC LIMIT ?`)
+      .all(limit) as Array<Record<string, unknown>>
+  ).map(toEvent);
+}
+
+/** What one wallet did, newest first, optionally only since a moment. */
+export function eventsByActor(wallet: string, limit = 50, sinceMs = 0): PlatformEventRow[] {
+  return (
+    db
+      .prepare(
+        `SELECT ${EVENT_COLUMNS} FROM platform_events
+         WHERE actor_wallet = ? AND at >= ?
+         ORDER BY block_number DESC, log_index DESC LIMIT ?`,
+      )
+      .all(wallet.toLowerCase(), sinceMs, limit) as Array<Record<string, unknown>>
+  ).map(toEvent);
+}
+
+export function eventsByMarket(marketId: bigint | string, limit = 50): PlatformEventRow[] {
+  return (
+    db
+      .prepare(
+        `SELECT ${EVENT_COLUMNS} FROM platform_events
+         WHERE market_id = ? ORDER BY block_number DESC, log_index DESC LIMIT ?`,
+      )
+      .all(marketId.toString(), limit) as Array<Record<string, unknown>>
+  ).map(toEvent);
+}
+
+export function eventsCountByActor(wallet: string): number {
+  const row = db
+    .prepare("SELECT COUNT(*) n FROM platform_events WHERE actor_wallet = ?")
+    .get(wallet.toLowerCase()) as { n: number };
+  return row.n;
+}
+
+/**
+ * Did this transaction come from one of our own triggered runs?
+ *
+ * Two agents told to mirror each other would otherwise answer each other's
+ * trades forever, paying curve fees on every lap until both wallets are empty.
+ * A trigger never fires on an event our own trigger produced, and the ledger
+ * knows which those are because the executor writes the pending row before
+ * Circle is ever called.
+ */
+export function txIsTriggerOrigin(txHash: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 ok FROM pending_tx p JOIN runs r ON r.id = p.run_id
+       WHERE p.tx_hash = ? AND r.trigger_kind = 'trigger' LIMIT 1`,
+    )
+    .get(txHash.toLowerCase()) as { ok: number } | undefined;
+  return Boolean(row);
+}
+
 export function llmCallRecord(
   agent: string,
   model: string,

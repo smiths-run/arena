@@ -23,6 +23,8 @@ import { decide } from "./schedule.ts";
 import { heuristicStrategist } from "./strategist.ts";
 import { llmStrategist } from "./llm-strategist.ts";
 import { circle } from "./shared.ts";
+import { actorByHandle, nearestHandles } from "./actors.ts";
+import * as feed from "./events.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 
@@ -159,6 +161,31 @@ async function operatorAuth(
 ): Promise<string | null> {
   if (body.expiry !== undefined) return verifyPilotGrant(body, row.owner ?? "");
   return verifyOwnerAction(body, actionMsg, row.name, row.owner ?? "");
+}
+
+/**
+ * An event as JSON. The actor is named where we can name them and reported as
+ * an external wallet where we cannot — the reader is never left to guess which.
+ */
+function eventJson(e: feed.EventView) {
+  return {
+    id: e.id,
+    type: e.type,
+    at: e.at,
+    blockNumber: e.blockNumber,
+    txHash: e.txHash,
+    marketId: e.marketId,
+    symbol: e.symbol,
+    usdc: e.usdc,
+    tokens: e.tokens,
+    actor: {
+      wallet: e.actor.wallet,
+      handle: e.actor.handle,
+      agentId: e.actor.agentId,
+      type: e.actor.kind === "external" ? "external_wallet" : "agent",
+    },
+    summary: feed.describe(e),
+  };
 }
 
 /** The operator's agent by handle, or their first. Row is undefined if none. */
@@ -632,6 +659,60 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           logIndex: t.logIndex,
           blockNumber: t.blockNumber.toString(),
         })),
+    });
+  }
+
+  /**
+   * The platform's own record of what happened, newest first.
+   *
+   * Public on purpose: everything in it is already on the chain, and an agent
+   * that must reason about other agents should read the same record a person
+   * does rather than a private one.
+   */
+  if (url.pathname === "/events") {
+    const limit = Math.min(Number(url.searchParams.get("limit") ?? 40), 200);
+    return json(res, {
+      events: feed.recent(limit).map(eventJson),
+      status: feed.ingestStatus(),
+    });
+  }
+
+  // One agent as the rest of the platform sees it: who it is, what it launched,
+  // what it has been doing. A handle nobody holds is a 404, not an empty page —
+  // "did you mean" belongs to the caller, and guessing belongs to nobody.
+  const agentPath = /^\/agents\/([^/]+)(\/activity|\/launches)?$/.exec(url.pathname);
+  if (req.method === "GET" && agentPath) {
+    const handle = decodeURIComponent(agentPath[1]).replace(/^@/, "").toLowerCase();
+    const actor = actorByHandle(handle);
+    if (!actor) {
+      return json(res, { error: `no agent called @${handle}`, nearest: nearestHandles(handle) }, 404);
+    }
+    const limit = Math.min(Number(url.searchParams.get("limit") ?? 40), 200);
+    const sinceMs = Number(url.searchParams.get("sinceMs") ?? 0);
+
+    if (agentPath[2] === "/activity") {
+      return json(res, { handle, activity: feed.activityOf(handle, limit, sinceMs).map(eventJson) });
+    }
+    if (agentPath[2] === "/launches") {
+      return json(res, { handle, launches: feed.launchesOf(handle, limit).map(eventJson) });
+    }
+
+    const entry = resolve(handle);
+    return json(res, {
+      handle,
+      agentId: actor.agentId,
+      wallet: actor.wallet,
+      kind: actor.kind,
+      approach: entry?.approach ?? null,
+      state: entry ? publicState({ state: entry.state, name: entry.name }) : null,
+      marketsLaunched: feed.launchesOf(handle, 50).map(eventJson),
+      positions: store.positionsOf(handle).filter((p) => p.tokens > 0n).map((p) => ({
+        marketId: p.marketId.toString(),
+        symbol: store.marketSymbol(p.marketId),
+        tokens: p.tokens.toString(),
+        costUsdc: p.costUsdc.toString(),
+      })),
+      recentActivity: feed.activityOf(handle, limit).map(eventJson),
     });
   }
 

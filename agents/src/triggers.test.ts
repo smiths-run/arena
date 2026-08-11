@@ -300,3 +300,43 @@ test("a trade our own trigger produced never triggers anyone", () => {
   triggers.matchNewEvents();
   assert.equal(store.firesOf("test1", 50).length, before, "the loop brake holds");
 });
+
+// ── every fire reaches an ending ───────────────────────────────────────────
+//
+// A claimed row that nobody finishes is worse than a failure: the operator
+// asked why their agent did nothing and the record has no answer, and the
+// caller — an operator's tab — takes the exception.
+
+const noClient = null as never;
+
+test("a fire whose rule was turned off ends as skipped, not as an error", async () => {
+  const p = plan("other", { targetHandle: "mfmf", event: "any", mode: "watch" });
+  const id = triggers.createTrigger("other", p.request);
+  store.triggerSetEnabled("other", id, false);
+  const fire = store.fireCreate(id, "other", "off:1", "pending")!;
+  await triggers.handleFire({ ...store.firesOf("other", 50).find((f) => f.id === fire)! }, noClient);
+  const row = store.firesOf("other", 50).find((f) => f.id === fire)!;
+  assert.equal(row.status, "skipped");
+  assert.match(row.detail ?? "", /turned off/);
+});
+
+test("a fire whose event is gone ends as skipped", async () => {
+  const p = plan("other", { targetHandle: "mfmf", event: "any", mode: "mirror", sizing: "fixed", amountUsdc: 100_000n });
+  const id = triggers.createTrigger("other", p.request);
+  const fire = store.fireCreate(id, "other", "ghost:1", "pending")!;
+  await triggers.handleFire(store.firesOf("other", 50).find((f) => f.id === fire)!, noClient);
+  const row = store.firesOf("other", 50).find((f) => f.id === fire)!;
+  assert.equal(row.status, "skipped");
+});
+
+test("a paused agent answers nothing, and says that is why", async () => {
+  const p = plan("other", { targetHandle: "mfmf", event: "any", mode: "watch" });
+  const id = triggers.createTrigger("other", p.request);
+  store.setPaused("other", true);
+  const fire = store.fireCreate(id, "other", "paused:1", "pending")!;
+  await triggers.handleFire(store.firesOf("other", 50).find((f) => f.id === fire)!, noClient);
+  const row = store.firesOf("other", 50).find((f) => f.id === fire)!;
+  assert.equal(row.status, "skipped");
+  assert.match(row.detail ?? "", /paused/);
+  store.setPaused("other", false);
+});

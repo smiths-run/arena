@@ -371,6 +371,22 @@ export async function handleFire(
 ): Promise<void> {
   // Exactly one caller gets past this line for any one fire.
   if (!store.fireClaim(fire.id)) return;
+  try {
+    await act(fire, client, strategist);
+  } catch (err) {
+    // A claimed fire must always reach an ending. A chain read that reverts is
+    // an answer to "why didn't you buy it?" — leaving the row claimed forever
+    // would turn a failed reaction into silence, and take the caller down with
+    // it: this is reached from an operator's tab.
+    store.fireResolve(fire.id, "failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function act(
+  fire: store.TriggerFireRow,
+  client: ReturnType<typeof circle>,
+  strategist: Strategist,
+): Promise<void> {
   const trigger = store.trigger(fire.triggerId);
   const entry = resolve(fire.agent);
   if (!trigger || !entry) {

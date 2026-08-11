@@ -53,6 +53,8 @@ export function RunScreen() {
   const [error, setError] = useState<string | null>(null);
   const [fundAmount, setFundAmount] = useState("5");
   const [showFund, setShowFund] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [showWithdraw, setShowWithdraw] = useState(false);
 
   // The pilot: this tab is the runtime. While it holds a valid grant it ticks
   // every running agent on its cooldown; close the tab and the fleet lands.
@@ -191,6 +193,47 @@ export function RunScreen() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? `${action} failed`);
+      await refresh(account, handle);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Take capital back out.
+   *
+   * This is the one action that always asks for the wallet, and deliberately:
+   * a day-long session is a convenience, and a convenience should not be able
+   * to empty an agent. The message signed here names the amount and the
+   * destination in full, so what executes is what was read — and the
+   * destination is not sent at all, it is the owner the server already knows.
+   */
+  const withdraw = async () => {
+    if (!account || !data?.agent) return;
+    const raw = withdrawAmount.trim();
+    if (!/^\d+(\.\d{1,6})?$/.test(raw) || Number(raw) <= 0) return;
+    const base = BigInt(Math.round(Number(raw) * 1e6));
+    setError(null);
+    setBusy("waiting for your signature…");
+    try {
+      const ts = Date.now();
+      const handle = data.agent.handle;
+      const signature = await signMessage(
+        account,
+        `Smiths Run: withdraw ${Number(base) / 1e6} USDC to ${account.toLowerCase()} @${handle} ${ts}`,
+      );
+      setBusy("sending…");
+      const res = await fetch("/api/runs/agent/withdraw", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ owner: account, handle, amountUsdc: base.toString(), ts, signature }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? body.detail ?? "withdrawal failed");
+      setShowWithdraw(false);
+      setWithdrawAmount("");
       await refresh(account, handle);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -377,6 +420,16 @@ export function RunScreen() {
           <button className="btn primary" onClick={() => setShowFund(!showFund)} disabled={busy !== null}>
             + Add USDC
           </button>
+          <button
+            className="btn"
+            onClick={() => {
+              setShowWithdraw(!showWithdraw);
+              if (!showWithdraw && e.withdrawableUsdc) setWithdrawAmount(fmtUsdc(e.withdrawableUsdc));
+            }}
+            disabled={busy !== null}
+          >
+            Withdraw
+          </button>
         </div>
       </div>
 
@@ -412,6 +465,50 @@ export function RunScreen() {
               {busy ?? "Send from my wallet"}
             </button>
           </div>
+        </div>
+      )}
+      {showWithdraw && (
+        <div className="card trade" style={{ marginTop: 12 }}>
+          <div className="trade-row">
+            <input
+              className="trade-input"
+              value={withdrawAmount}
+              onChange={(ev) => setWithdrawAmount(ev.target.value)}
+              inputMode="decimal"
+              placeholder="0.00"
+              disabled={busy !== null}
+            />
+            <span className="dim">USDC</span>
+            <button
+              className="btn tab"
+              onClick={() => setWithdrawAmount(fmtUsdc(e.withdrawableUsdc ?? "0"))}
+              disabled={busy !== null || !e.withdrawableUsdc}
+            >
+              max
+            </button>
+            <button
+              className="btn primary"
+              onClick={withdraw}
+              disabled={busy !== null || !withdrawAmount.trim()}
+            >
+              {busy ?? "Send to my wallet"}
+            </button>
+          </div>
+          <p className="dim" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+            {e.withdrawableUsdc && BigInt(e.withdrawableUsdc) > 0n ? (
+              <>
+                {fmtUsdc(e.withdrawableUsdc)} USDC can leave now — the rest is either held in
+                positions or kept back for gas.{" "}
+                {(data.positions ?? []).length > 0 &&
+                  `${(data.positions ?? []).length} position(s) stay open; ask @${a.handle} in chat to sell them first if you want that value too.`}
+              </>
+            ) : (
+              <>Nothing can leave right now — the wallet holds only what it needs for gas.</>
+            )}{" "}
+            It goes to your own wallet, {account ? short(account) : "the one that owns this agent"},
+            and nowhere else — the destination is not something this page sends. Your wallet signs
+            the exact amount.
+          </p>
         </div>
       )}
       {error && <p className="trade-status err">{error}</p>}

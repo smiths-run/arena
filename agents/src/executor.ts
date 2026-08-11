@@ -132,7 +132,8 @@ async function ensureTokenAllowance(
 export interface Executed {
   txHash: string;
   usdcMoved: bigint;
-  marketId: bigint;
+  /** Null where the action is not about a market — a withdrawal, for one. */
+  marketId: bigint | null;
 }
 
 /** Execute a policy-approved action. Skips must never reach this function. */
@@ -191,6 +192,23 @@ export async function execute(
       runId,
     );
     return { txHash, usdcMoved: action.amount, marketId: action.marketId };
+  }
+
+  if (action.kind === "withdraw") {
+    // A plain ERC-20 transfer, signed by the agent's own wallet like every
+    // other action it takes. The destination came from the ledger, not from
+    // the request, and the amount was checked against gas before we got here.
+    const txHash = await submit(
+      client,
+      agent,
+      "withdraw",
+      USDC,
+      "transfer(address,uint256)",
+      [action.to, action.amount.toString()],
+      ["withdraw", agent.address, action.to, action.amount.toString(), runId],
+      runId,
+    );
+    return { txHash, usdcMoved: action.amount, marketId: null };
   }
 
   // launch

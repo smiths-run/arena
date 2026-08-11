@@ -241,7 +241,7 @@ export async function runOnce(
       reason: summarize(action),
       txHash: done.txHash,
       usdc: done.usdcMoved,
-      marketId: done.marketId,
+      marketId: done.marketId ?? undefined,
       intelCost,
       intelVerdict,
       intelMarket: intelCost !== undefined && action.kind === "buy" ? action.marketId : undefined,

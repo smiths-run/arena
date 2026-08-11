@@ -13,6 +13,14 @@ export type Action =
   | { kind: "sell"; marketId: bigint; tokens: bigint }
   | { kind: "launch"; name: string; symbol: string; initialBuy: bigint }
   | { kind: "claim"; marketId: bigint; amount: bigint }
+  /**
+   * Cash leaving the agent, back to the operator who funded it.
+   *
+   * The destination is never a parameter a caller may choose — it is read from
+   * the agent's owner — because a withdrawal whose address came from the
+   * request would turn any weakness in authorization into a drain.
+   */
+  | { kind: "withdraw"; amount: bigint; to: `0x${string}` }
   | { kind: "skip"; reason: string };
 
 export interface Observation {
@@ -45,7 +53,7 @@ const HARD_MAX_TRADE = 5_000_000n;
  * transaction that spends it, or for the exit afterwards. Ten times the measured
  * cost is cheap insurance against a fee spike.
  */
-const GAS_HEADROOM_USDC = 20_000n; // 0.02 USDC
+export const GAS_HEADROOM_USDC = 20_000n; // 0.02 USDC
 
 /**
  * The two-layer verdict, for operator-directed actions.
@@ -79,6 +87,26 @@ export function decideLayered(
   if (action.kind === "skip") return { status: "allowed" };
 
   // ── the hard layer: never crossed, whoever asks ────────────────────────────
+
+  // A withdrawal is the operator taking their own money back, so none of the
+  // trading limits apply to it. One thing does: gas on Arc is USDC, so a wallet
+  // emptied to the last unit cannot pay for the transaction that empties it —
+  // and could never sell its way out afterwards either.
+  if (action.kind === "withdraw") {
+    if (action.amount <= 0n) {
+      return { status: "hard_rejected", reason: "a withdrawal needs an amount above zero" };
+    }
+    if (action.amount + GAS_HEADROOM_USDC > obs.balanceUsdc) {
+      return {
+        status: "hard_rejected",
+        reason:
+          `${Number(action.amount) / 1e6} USDC would leave nothing for gas — ` +
+          `at most ${Number(obs.balanceUsdc - GAS_HEADROOM_USDC) / 1e6} USDC can leave this wallet`,
+      };
+    }
+    return { status: "allowed" };
+  }
+
   const spend =
     action.kind === "buy" ? action.usdcIn : action.kind === "launch" ? action.initialBuy : 0n;
 
@@ -185,6 +213,13 @@ export function decideLayered(
 
 export function evaluate(action: Action, strategy: Strategy, obs: Observation): Verdict {
   if (action.kind === "skip") return { ok: true };
+
+  // Moving money out is an operator's decision, never the agent's own. The
+  // autonomous path cannot reach it: `allowedActions` does not contain it, and
+  // this says so in as many words rather than leaving it to a list.
+  if (action.kind === "withdraw") {
+    return { ok: false, reason: "an agent never withdraws its own capital" };
+  }
 
   if (!strategy.allowedActions.includes(action.kind)) {
     return { ok: false, reason: `action "${action.kind}" is not permitted by strategy` };

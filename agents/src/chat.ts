@@ -18,7 +18,7 @@ import type { RosterEntry } from "./roster.ts";
 import { APPROACHES, APPROACH_GUIDANCE, RISKS, type Approach } from "./visitor-strategy.ts";
 import { toAction, type Proposal } from "./proposal.ts";
 import { decideLayered, type PolicyConflict } from "./policy.ts";
-import { describeAction, observeFor } from "./operator.ts";
+import { describeAction, observeFor, withdrawable } from "./operator.ts";
 import { actorByHandle, nearestHandles } from "./actors.ts";
 import { describePlan, planTrigger } from "./triggers.ts";
 import * as feed from "./events.ts";
@@ -67,6 +67,19 @@ export function statedConflicts(row: { conflicts: string | null }): PolicyConfli
  */
 export function crossesOperatorRule(row: { conflicts: string | null }): boolean {
   return statedConflicts(row).length > 0;
+}
+
+/**
+ * Does confirming this need the wallet, rather than the session?
+ *
+ * Two things ask for a signature. Crossing a limit the operator set, because a
+ * standing session was never consent to cross it. And money leaving the agent,
+ * because a day-old convenience should not be able to authorize a drain — that
+ * is the one act where the signature is the product's promise rather than
+ * paperwork.
+ */
+export function requiresWalletSignature(row: { type: string; conflicts: string | null }): boolean {
+  return row.type === "withdraw" || crossesOperatorRule(row);
 }
 
 export function pendingView(row: store.PendingConfirmationRow): PendingView {
@@ -155,16 +168,21 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "propose_action",
     description:
-      "Propose one onchain action for the operator to sign. Nothing executes until they do. Use ONLY when the operator explicitly asked for the action.",
+      "Propose one onchain action for the operator to sign. Nothing executes until they do. Use ONLY when the operator explicitly asked for the action. kind=withdraw sends free USDC back to the operator's own wallet — it cannot send anywhere else, and it cannot move money that is still held in positions.",
     input_schema: {
       type: "object",
       additionalProperties: false,
       required: ["kind", "reason"],
       properties: {
-        kind: { type: "string", enum: ["buy", "sell", "launch", "pause", "resume"] },
+        kind: { type: "string", enum: ["buy", "sell", "launch", "pause", "resume", "withdraw"] },
         reason: { type: "string", description: "One sentence, shown to the operator." },
         marketId: { anyOf: [{ type: "integer" }, { type: "null" }] },
         usdcIn: { anyOf: [{ type: "number" }, { type: "null" }], description: "Buy size in USDC." },
+        amountUsdc: {
+          anyOf: [{ type: "number" }, { type: "null" }],
+          description:
+            "For kind=withdraw: how much USDC to send back. Null or omitted means everything that can leave, which keeps a little back for gas.",
+        },
         sellFraction: {
           anyOf: [{ type: "number" }, { type: "null" }],
           description: "Fraction of the held position to sell, in (0, 1].",
@@ -266,6 +284,8 @@ function systemPrompt(entry: RosterEntry, row: store.UserAgentRow): string {
     `How authority works here, and you must say so when asked: you act autonomously under your rules. Your operator can direct an action or change your configuration, but nothing you propose executes until they sign it with their wallet. A signed operator command may override your normal limits; it can never cross the contract's hard guardrails or the operating reserve. Every action, refusal and override becomes a signed public receipt.`,
     ``,
     `You can see the whole platform, not only your own books: who launched each market, who traded it, and what any agent has been doing, read from the chain. Attribution is exact — if you want to know whether a coin is @someone's, look it up with get_market_activity or get_agent_launches. Never infer it from a symbol that resembles a handle, and never assume a handle exists: resolve_handle first, and if it does not exist say so and offer the nearest match rather than following a stranger.`,
+    ``,
+    `Your operator can take their capital back at any time, and you help them do it rather than talking them out of it. Only free cash can leave: value sitting in a position is not money until it is sold. So when they ask to cash out, say what is where — cash on one side, positions and what they are worth on the other — and if they want it all, propose selling one position at a time, each with its own fresh quote, and then propose the withdrawal. A withdrawal only ever goes to their own wallet, never anywhere else, and a little is always kept back because gas here is USDC and a wallet emptied to the last unit cannot transact at all.`,
     ``,
     `You can also react to another agent the moment they act. When the operator says to watch, follow, copy or mirror someone — or to do something whenever someone else does — that is propose_trigger, not a rule: a rule is prose you weigh, a trigger is a standing instruction that wakes you as it happens, without waiting for your cooldown. Say which mode you are proposing and why: watch records their activity and trades nothing, evaluate wakes you to judge it under your own approach and limits, mirror does the same trade deterministically. Anything that can trade carries a size, a per-action cap and a daily budget, and it only crosses your normal limits if the operator explicitly says so.`,
     ``,
@@ -429,6 +449,39 @@ async function handlePropose(
     if (kind === "pause" || kind === "resume") {
       const summary = kind === "pause" ? "Pause autonomous trading" : "Resume autonomous trading";
       const id = store.confirmationCreate(entry.name, kind, JSON.stringify({ kind }), summary, null);
+      return { toolResult: JSON.stringify({ proposed: summary, confirmationId: id }), created: true };
+    }
+
+    if (kind === "withdraw") {
+      // Only free cash can leave: what is in a position is not money yet, and
+      // the wallet keeps enough to pay for the transaction that empties it.
+      const balance = await obs.walletUsdc(entry.address);
+      const most = withdrawable(balance);
+      if (most <= 0n) {
+        return fail(
+          `there is nothing to send back — the wallet holds ${Number(balance) / 1e6} USDC, which is only enough for gas`,
+        );
+      }
+      const asked =
+        typeof input.amountUsdc === "number" && Number.isFinite(input.amountUsdc) && input.amountUsdc > 0
+          ? BigInt(Math.round(input.amountUsdc * 1e6))
+          : most;
+      if (asked > most) {
+        return fail(
+          `only ${Number(most) / 1e6} USDC can leave right now — the rest is either in positions or kept back for gas`,
+        );
+      }
+      const held = store.positionsOf(entry.name).filter((p) => p.tokens > 0n).length;
+      const summary =
+        `Send ${Number(asked) / 1e6} USDC back to your wallet ${entry.owner}` +
+        (held > 0 ? `. ${held} position(s) stay open — sell them first if you want that value too.` : ".");
+      const id = store.confirmationCreate(
+        entry.name,
+        "withdraw",
+        JSON.stringify({ amountUsdc: `${asked}n` }),
+        summary,
+        null,
+      );
       return { toolResult: JSON.stringify({ proposed: summary, confirmationId: id }), created: true };
     }
 

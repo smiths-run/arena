@@ -107,6 +107,8 @@ export interface RunOverview {
     netResult: string;
     positionCount: number;
     claimableFees: string | null;
+    /** What could leave the wallet now — balance minus the gas it must keep. */
+    withdrawableUsdc: string | null;
   };
   positions?: Array<{
     marketId: string;

@@ -13,8 +13,14 @@ import { fullRoster, resolve } from "./roster.ts";
 import { createUserAgent } from "./agent-factory.ts";
 import { handleAvailable } from "./identity.ts";
 import { APPROACHES, RESERVED_NAMES, RISKS, deserializeStrategy, serializeStrategy, type Approach } from "./visitor-strategy.ts";
-import { confirmationHash, crossesOperatorRule, handleChatMessage, pendingView, reviveAction } from "./chat.ts";
-import { executeOperatorAction } from "./operator.ts";
+import {
+  confirmationHash,
+  handleChatMessage,
+  pendingView,
+  requiresWalletSignature,
+  reviveAction,
+} from "./chat.ts";
+import { executeOperatorAction, executeWithdrawal, withdrawable } from "./operator.ts";
 import type { PolicyConflict } from "./policy.ts";
 import { equityOf } from "./equity.ts";
 import { runOnce } from "./runtime.ts";
@@ -552,6 +558,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         netResult: store.netResultByAgent().find((n) => n.agent === row.name)?.net ?? "0",
         positionCount: positions.length,
         claimableFees: equity?.claimableCreatorFees?.toString() ?? null,
+        // What could leave the wallet right now: everything except the gas it
+        // needs to act at all. Offering a "max" that bricks the agent would be
+        // a worse answer than offering none.
+        withdrawableUsdc: cash === null ? null : withdrawable(BigInt(cash)).toString(),
       },
       positions,
       recentDecisions: decisions,
@@ -662,6 +672,55 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (err) return json(res, { error: err }, 403);
     store.setPaused(row.name, action === "pause");
     return json(res, { handle: row.name, state: publicState(row) });
+  }
+
+  /**
+   * Take capital back out of an agent.
+   *
+   * This is the one place money leaves the system, and it is the one action
+   * that always takes a fresh wallet signature — no session, no exceptions.
+   * A grant is a day-long convenience; a drain is not something a day-old
+   * convenience should be able to authorize, and the message the operator
+   * signs names the exact amount and the exact destination so what executes
+   * is what they read.
+   *
+   * The destination is not in the request at all. It is the owner on file.
+   */
+  if (req.method === "POST" && url.pathname === "/agent/withdraw") {
+    const body = await readJson(req);
+    const owner = typeof body.owner === "string" ? body.owner.toLowerCase() : "";
+    const mine = owner ? store.userAgentsListByOwner(owner) : [];
+    const wanted = typeof body.handle === "string" ? body.handle.toLowerCase() : "";
+    const row = wanted ? mine.find((r) => r.name === wanted) : mine[0];
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+
+    const amount = (() => {
+      try {
+        const raw = String(body.amountUsdc ?? "");
+        return /^\d+$/.test(raw) ? BigInt(raw) : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (amount === null || amount <= 0n) return json(res, { error: "amount must be a positive number of USDC base units" }, 400);
+
+    const err = await verifyOwnerAction(
+      body,
+      `withdraw ${Number(amount) / 1e6} USDC to ${row.owner}`,
+      row.name,
+      row.owner ?? "",
+    );
+    if (err) return json(res, { error: err }, 403);
+
+    const entry = resolve(row.name);
+    if (!entry) return json(res, { error: "agent is not active yet" }, 409);
+    pilotClient ??= circle();
+    const result = await executeWithdrawal(pilotClient, entry, amount);
+    return json(
+      res,
+      { outcome: result.outcome, detail: result.detail, txHash: result.txHash ?? null, runId: result.runId },
+      result.outcome === "acted" ? 200 : 400,
+    );
   }
 
   // Visitor agent creation: the one write this surface accepts. Everything a
@@ -943,10 +1002,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, { error: "that proposal is gone — it expired or was replaced" }, 409);
     }
     const hash = confirmationHash(active.payload, active.summary);
-    const crossesARule = crossesOperatorRule(active);
+    const crossesARule = requiresWalletSignature(active);
     if (crossesARule && body.expiry !== undefined) {
       // A grant is a session, and an override is not a session-level act.
-      return json(res, { error: "this crosses a rule you set — confirm it with a signature" }, 403);
+      return json(
+        res,
+        {
+          error:
+            active.type === "withdraw"
+              ? "moving money out always takes a signature"
+              : "this crosses a rule you set — confirm it with a signature",
+        },
+        403,
+      );
     }
     const err = crossesARule
       ? await verifyOwnerAction(body, `confirm #${id} ${hash}`, row.name, row.owner ?? "")
@@ -966,6 +1034,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           : [];
         pilotClient ??= circle();
         const r = await executeOperatorAction(pilotClient, entry, reviveAction(consumed.payload), conflicts, id);
+        txHash = r.txHash ?? null;
+        result =
+          r.outcome === "acted"
+            ? `done — ${r.detail}`
+            : r.outcome === "rejected"
+              ? `refused — ${r.detail}`
+              : `failed — ${r.detail}`;
+      } else if (consumed.type === "withdraw") {
+        const entry = resolve(row.name);
+        if (!entry) throw new Error("agent is not active");
+        const payload = JSON.parse(consumed.payload) as { amountUsdc: string };
+        pilotClient ??= circle();
+        const r = await executeWithdrawal(pilotClient, entry, BigInt(payload.amountUsdc.replace(/n$/, "")));
         txHash = r.txHash ?? null;
         result =
           r.outcome === "acted"

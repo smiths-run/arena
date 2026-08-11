@@ -12,7 +12,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decideLayered, evaluate, type Action, type Observation } from "./policy.ts";
-import { crossesOperatorRule, statedConflicts } from "./chat.ts";
+import { crossesOperatorRule, requiresWalletSignature, statedConflicts } from "./chat.ts";
 import { STRATEGIES } from "./config.ts";
 
 process.env.AGENTS_DATA_DIR = mkdtempSync(join(tmpdir(), "smiths-operator-"));
@@ -140,4 +140,57 @@ test("unreadable conflict data is treated as a crossing, not as none", () => {
   assert.equal(crossesOperatorRule({ conflicts: "{not json" }), true);
   assert.equal(crossesOperatorRule({ conflicts: '"a string"' }), true, "valid JSON, wrong shape");
   assert.equal(statedConflicts({ conflicts: "{not json" })[0].rule, "unreadable");
+});
+
+// ── taking capital back out ────────────────────────────────────────────────
+//
+// A withdrawal is the only action that moves money out of the system, so the
+// ways it can go wrong are the ways an agent gets emptied or bricked.
+
+const withdrawTo = "0x1111111111111111111111111111111111111111" as `0x${string}`;
+const withdraw = (amount: bigint): Action => ({ kind: "withdraw", amount, to: withdrawTo });
+
+test("a withdrawal is not a trade: the daily cap and trade limits do not touch it", () => {
+  // Well past both the per-trade limit and the day's spend, and still allowed.
+  const decision = decideLayered(
+    withdraw(4_000_000n),
+    strategy,
+    obs({ balanceUsdc: 5_000_000n, spent24h: strategy.dailySpendUsdc }),
+  );
+  assert.equal(decision.status, "allowed");
+});
+
+test("a wallet is never emptied past the gas it needs to act", () => {
+  const decision = decideLayered(withdraw(1_000_000n), strategy, obs({ balanceUsdc: 1_000_000n }));
+  assert.equal(decision.status, "hard_rejected");
+  assert.match(
+    decision.status === "hard_rejected" ? decision.reason : "",
+    /nothing for gas/,
+    "gas on Arc is USDC, so an emptied wallet cannot even sell its way out",
+  );
+
+  // One unit under the headroom is fine.
+  assert.equal(
+    decideLayered(withdraw(980_000n), strategy, obs({ balanceUsdc: 1_000_000n })).status,
+    "allowed",
+  );
+});
+
+test("nothing and negative amounts are refused outright", () => {
+  assert.equal(decideLayered(withdraw(0n), strategy, obs()).status, "hard_rejected");
+  assert.equal(decideLayered(withdraw(-1n), strategy, obs()).status, "hard_rejected");
+});
+
+test("an agent never withdraws its own capital on the autonomous path", () => {
+  const verdict = evaluate(withdraw(100_000n), strategy, obs({ balanceUsdc: 5_000_000n }));
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.ok ? "" : verdict.reason, /never withdraws/);
+});
+
+test("confirming a withdrawal always takes the wallet, conflicts or not", () => {
+  assert.equal(requiresWalletSignature({ type: "withdraw", conflicts: null }), true);
+  assert.equal(requiresWalletSignature({ type: "withdraw", conflicts: "[]" }), true);
+  // And the rest of the surface is unchanged: a clean proposal is still a click.
+  assert.equal(requiresWalletSignature({ type: "action", conflicts: null }), false);
+  assert.equal(requiresWalletSignature({ type: "trigger_add", conflicts: null }), false);
 });

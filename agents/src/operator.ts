@@ -12,7 +12,13 @@
  */
 import { circle } from "./shared.ts";
 import type { RosterEntry } from "./roster.ts";
-import { decideLayered, type Action, type Observation, type PolicyConflict } from "./policy.ts";
+import {
+  GAS_HEADROOM_USDC,
+  decideLayered,
+  type Action,
+  type Observation,
+  type PolicyConflict,
+} from "./policy.ts";
 import { closeRunWithReceipt, openRunEquity } from "./runtime.ts";
 import * as executor from "./executor.ts";
 import * as obs from "./observe.ts";
@@ -31,6 +37,8 @@ export function describeAction(action: Action): string {
       return `launch ${action.symbol} ("${action.name}") with a ${Number(action.initialBuy) / 1e6} USDC initial buy`;
     case "claim":
       return `claim ${Number(action.amount) / 1e6} USDC of creator fees on ${where(action.marketId)}`;
+    case "withdraw":
+      return `send ${Number(action.amount) / 1e6} USDC to your wallet ${action.to}`;
     case "skip":
       return "do nothing";
   }
@@ -147,7 +155,7 @@ export async function executeDirected(
       reason: describeAction(action) + overrideNote,
       txHash: done.txHash,
       usdc: done.usdcMoved,
-      marketId: done.marketId,
+      marketId: done.marketId ?? undefined,
     });
     log(`${trigger} action executed: ${describeAction(action)}  tx=${done.txHash}`);
     await closeRunWithReceipt(client, entry, runId, trigger, opening, log);
@@ -159,4 +167,96 @@ export async function executeDirected(
     await closeRunWithReceipt(client, entry, runId, trigger, opening, log);
     return { outcome: "error", runId, detail: reason };
   }
+}
+
+/**
+ * Send the operator's own capital back to the wallet it came from.
+ *
+ * Three things make this different from every other action here, and each is
+ * deliberate.
+ *
+ * The destination is never asked for. It is the agent's owner as the ledger
+ * knows them, and the signed message names it in full — a withdrawal that took
+ * its address from the request would turn any weakness in authorization into a
+ * drain, and a truncated address in a signed message is not an address at all.
+ *
+ * No equity is snapshotted at the open. Net result is measured as equity before
+ * and after a run precisely so that no cost can hide inside one; money the
+ * operator takes out is not a cost and not a loss, and recording it as one
+ * would put a large false loss on the agent's public record. The run is still
+ * signed and still public — it simply does not pretend to be performance.
+ *
+ * It is allowed in any state. An agent that is paused, unfunded or in error
+ * still holds someone's money, and a state machine must never be the reason
+ * they cannot get it back.
+ */
+export async function executeWithdrawal(
+  client: ReturnType<typeof circle>,
+  entry: RosterEntry,
+  amount: bigint,
+): Promise<OperatorResult> {
+  const to = entry.owner;
+  if (!to) {
+    return { outcome: "rejected", runId: 0, detail: "this agent has no operator to pay out to" };
+  }
+  if (store.unresolvedPending().some((p) => p.agent === entry.name)) {
+    return {
+      outcome: "rejected",
+      runId: 0,
+      detail: "a transaction is still in flight — the balance is not settled yet, try again in a moment",
+    };
+  }
+  // One wallet, one thing at a time: the scheduler and the trigger lane hold
+  // this same lease, so a withdrawal cannot race a trade onto the same nonce.
+  if (!store.leaseAcquire(entry.name, "withdraw", 120_000)) {
+    return { outcome: "rejected", runId: 0, detail: "the agent is mid-run — try again in a moment" };
+  }
+
+  const action: Action = { kind: "withdraw", amount, to };
+  const runId = store.startRun(entry.name, "withdraw");
+  const log = (msg: string) => console.log(`[${entry.name}#${runId}] ${msg}`);
+
+  try {
+    const observation = await observeFor(entry, action);
+    const decision = decideLayered(action, entry.strategy, observation);
+    if (decision.status === "hard_rejected") {
+      store.finishRun(runId, "rejected", {
+        actionKind: "withdraw",
+        reason: `hard guardrail: ${decision.reason} [operator withdrawal]`,
+      });
+      log(`withdrawal refused — ${decision.reason}`);
+      await closeRunWithReceipt(client, entry, runId, "withdraw", null, log);
+      return { outcome: "rejected", runId, detail: decision.reason };
+    }
+
+    const done = await executor.execute(client, entry, action, runId);
+    store.finishRun(runId, "acted", {
+      actionKind: "withdraw",
+      reason: `${describeAction(action)} [operator withdrawal]`,
+      txHash: done.txHash,
+      usdc: done.usdcMoved,
+    });
+    log(`withdrew ${Number(amount) / 1e6} USDC to ${to}  tx=${done.txHash}`);
+    await closeRunWithReceipt(client, entry, runId, "withdraw", null, log);
+    return { outcome: "acted", runId, detail: describeAction(action), txHash: done.txHash };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    store.finishRun(runId, "error", {
+      // Name the attempt even when it failed: "the withdrawal errored" is an
+      // answer, "something errored" is not.
+      actionKind: "withdraw",
+      usdc: amount,
+      reason: `${reason} [operator withdrawal]`,
+    });
+    log(`withdrawal failed — ${reason}`);
+    await closeRunWithReceipt(client, entry, runId, "withdraw", null, log);
+    return { outcome: "error", runId, detail: reason };
+  } finally {
+    store.leaseRelease(entry.name, "withdraw");
+  }
+}
+
+/** The most that may leave a wallet: everything except the gas it needs to act. */
+export function withdrawable(balanceUsdc: bigint): bigint {
+  return balanceUsdc > GAS_HEADROOM_USDC ? balanceUsdc - GAS_HEADROOM_USDC : 0n;
 }

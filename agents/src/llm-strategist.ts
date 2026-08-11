@@ -54,6 +54,7 @@ export const llmStrategist: Strategist = async (input) => {
 
     const { system, user } = buildPrompt(input, {
       description: input.description,
+      wakeReason: input.wakeReason,
       rules: store.rulesOf(input.agentName).filter((r) => r.enabled === 1).map((r) => r.text),
       positions: valued,
       claimable,

@@ -399,6 +399,19 @@ export async function walletUsdc(address: `0x${string}`): Promise<bigint> {
   return pub.readContract({ address: USDC, abi: chainAbi, functionName: "balanceOf", args: [address] });
 }
 
+/**
+ * Any market token's balance for any holder.
+ *
+ * Mirroring a sale needs the share the seller sold, and the only honest way to
+ * know it is what they held before: what they hold now plus what just left.
+ */
+export async function tokenBalance(
+  token: `0x${string}`,
+  holder: `0x${string}`,
+): Promise<bigint> {
+  return pub.readContract({ address: token, abi: chainAbi, functionName: "balanceOf", args: [holder] });
+}
+
 export async function currentBlock(): Promise<bigint> {
   return pub.getBlockNumber();
 }

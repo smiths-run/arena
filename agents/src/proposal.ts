@@ -159,6 +159,8 @@ const usd = (v: bigint) => (Number(v) / 1e6).toFixed(4);
 
 export interface PromptExtras {
   description: string;
+  /** What woke this run, when something other than the cooldown did. */
+  wakeReason?: string;
   /** Enabled persistent operator rules, in creation order. */
   rules?: string[];
   positions: Array<{ marketId: bigint; tokens: bigint; costUsdc: bigint; valueUsdc: bigint }>;
@@ -268,6 +270,12 @@ export function buildPrompt(
     .join("\n");
 
   const user = [
+    // A run woken by another agent's move says so first: the agent is
+    // answering something specific, and hiding that would leave it reasoning
+    // about a world it cannot see the reason for.
+    extras.wakeReason
+      ? `You were woken early because ${extras.wakeReason}. This is why you are running now, not the cooldown.`
+      : ``,
     `Block ${input.blockNow}. You have launched ${input.ownMarkets} market(s).`,
     ``,
     `Markets:`,

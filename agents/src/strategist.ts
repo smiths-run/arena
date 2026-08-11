@@ -28,6 +28,14 @@ export interface StrategistInput {
   blockNow: bigint;
   /** Authoritative own-market count: chain plus in-flight. */
   ownMarkets: number;
+  /**
+   * Why this run is happening now, when the clock is not the reason.
+   *
+   * A run woken by another agent's action should say so in the record: the
+   * agent is answering something specific, and a reader deserves to know what
+   * it was rather than seeing an unexplained trade between cooldowns.
+   */
+  wakeReason?: string;
 }
 
 export type Strategist = (input: StrategistInput) => Promise<Action>;

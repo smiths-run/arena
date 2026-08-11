@@ -75,16 +75,37 @@ export async function executeOperatorAction(
   acknowledged: PolicyConflict[],
   confirmationId: number,
 ): Promise<OperatorResult> {
-  const runId = store.startRun(entry.name, "operator");
-  const log = (msg: string) => console.log(`[${entry.name}#${runId}] ${msg}`);
-  const opening = await openRunEquity(entry.name, entry.address, runId);
-
-  const overrideNote =
+  const note =
     acknowledged.length > 0
       ? ` [operator override, confirmed #${confirmationId}: ${acknowledged
           .map((c) => c.rule)
           .join(", ")}]`
       : ` [operator-directed, confirmed #${confirmationId}]`;
+  return executeDirected(client, entry, action, { acknowledged, note, trigger: "operator" });
+}
+
+/**
+ * Run one already-decided action through policy, execution and a receipt.
+ *
+ * Two things direct an agent rather than proposing to it: an operator's signed
+ * command, and a trigger the operator confirmed earlier. They differ in what
+ * consent looks like and in what the receipt should say, and in nothing else —
+ * so they share this, and money moves in exactly one place.
+ *
+ * `acknowledged` are the agent-policy conflicts that consent already covers.
+ * They are recorded rather than re-blocked; anything that appeared since then
+ * blocks, because a consent given five minutes ago was not given to it.
+ */
+export async function executeDirected(
+  client: ReturnType<typeof circle>,
+  entry: RosterEntry,
+  action: Action,
+  opts: { acknowledged: PolicyConflict[]; note: string; trigger: string },
+): Promise<OperatorResult> {
+  const { acknowledged, note: overrideNote, trigger } = opts;
+  const runId = store.startRun(entry.name, trigger);
+  const log = (msg: string) => console.log(`[${entry.name}#${runId}] ${msg}`);
+  const opening = await openRunEquity(entry.name, entry.address, runId);
 
   try {
     const observation = await observeFor(entry, action);
@@ -95,8 +116,8 @@ export async function executeOperatorAction(
         actionKind: action.kind,
         reason: `hard guardrail: ${decision.reason}${overrideNote}`,
       });
-      log(`hard-rejected operator command — ${decision.reason}`);
-      await closeRunWithReceipt(client, entry, runId, "operator", opening, log);
+      log(`hard-rejected ${trigger} action — ${decision.reason}`);
+      await closeRunWithReceipt(client, entry, runId, trigger, opening, log);
       return { outcome: "rejected", runId, detail: decision.reason };
     }
 
@@ -115,7 +136,7 @@ export async function executeOperatorAction(
           reason: detail + overrideNote,
         });
         log(`rejected — ${detail}`);
-        await closeRunWithReceipt(client, entry, runId, "operator", opening, log);
+        await closeRunWithReceipt(client, entry, runId, trigger, opening, log);
         return { outcome: "rejected", runId, detail };
       }
     }
@@ -128,14 +149,14 @@ export async function executeOperatorAction(
       usdc: done.usdcMoved,
       marketId: done.marketId,
     });
-    log(`operator action executed: ${describeAction(action)}  tx=${done.txHash}`);
-    await closeRunWithReceipt(client, entry, runId, "operator", opening, log);
+    log(`${trigger} action executed: ${describeAction(action)}  tx=${done.txHash}`);
+    await closeRunWithReceipt(client, entry, runId, trigger, opening, log);
     return { outcome: "acted", runId, detail: describeAction(action), txHash: done.txHash };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     store.finishRun(runId, "error", { reason: reason + overrideNote });
-    log(`operator action failed — ${reason}`);
-    await closeRunWithReceipt(client, entry, runId, "operator", opening, log);
+    log(`${trigger} action failed — ${reason}`);
+    await closeRunWithReceipt(client, entry, runId, trigger, opening, log);
     return { outcome: "error", runId, detail: reason };
   }
 }

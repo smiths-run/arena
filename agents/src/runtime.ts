@@ -96,6 +96,8 @@ export async function runOnce(
   trigger: string,
   client: ReturnType<typeof circle>,
   strategist: Strategist = heuristicStrategist,
+  /** Why this run is happening now, when something other than the clock asked. */
+  wakeReason?: string,
 ): Promise<void> {
   const entry = resolve(agentName);
   if (!entry) throw new Error(`unknown agent ${agentName}`);
@@ -134,6 +136,7 @@ export async function runOnce(
       recentTrades,
       blockNow,
       ownMarkets,
+      wakeReason,
     });
 
     if (action.kind === "skip") {

@@ -25,6 +25,7 @@ import { llmStrategist } from "./llm-strategist.ts";
 import { circle } from "./shared.ts";
 import { actorByHandle, nearestHandles } from "./actors.ts";
 import * as feed from "./events.ts";
+import { createTrigger, describePlan, planTrigger, runPendingFires } from "./triggers.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 
@@ -161,6 +162,58 @@ async function operatorAuth(
 ): Promise<string | null> {
   if (body.expiry !== undefined) return verifyPilotGrant(body, row.owner ?? "");
   return verifyOwnerAction(body, actionMsg, row.name, row.owner ?? "");
+}
+
+/** bigints are not JSON; hashing a plan must still be deterministic. */
+function bigintSafe(_k: string, v: unknown) {
+  return typeof v === "bigint" ? `${v}n` : v;
+}
+
+/** A trigger as the operator reads it, with what it has actually done. */
+function triggerJson(t: store.TriggerRow) {
+  const last = store.firesForTrigger(t.id, 1)[0] ?? null;
+  return {
+    id: t.id,
+    target: t.targetHandle,
+    event: t.event,
+    mode: t.mode,
+    sizing: t.sizing,
+    amountUsdc: t.amountUsdc === null ? null : t.amountUsdc.toString(),
+    proportionBps: t.proportionBps,
+    dailyBudgetUsdc: t.dailyBudgetUsdc.toString(),
+    spentTodayUsdc: store.triggerSpent24h(t.id).toString(),
+    maxActionUsdc: t.maxActionUsdc.toString(),
+    overrideRisk: t.overrideRisk,
+    expiresAt: t.expiresAt,
+    enabled: t.enabled,
+    summary: describePlan({
+      targetHandle: t.targetHandle,
+      event: t.event,
+      mode: t.mode,
+      sizing: t.sizing,
+      amountUsdc: t.amountUsdc,
+      proportionBps: t.proportionBps,
+      dailyBudgetUsdc: t.dailyBudgetUsdc,
+      maxActionUsdc: t.maxActionUsdc,
+      overrideRisk: t.overrideRisk,
+      expiresAt: t.expiresAt ?? 0,
+    }),
+    lastFire: last ? fireJson(last) : null,
+  };
+}
+
+/** What one trigger did about one event, including doing nothing and why. */
+function fireJson(f: store.TriggerFireRow) {
+  return {
+    id: f.id,
+    triggerId: f.triggerId,
+    at: f.createdAt,
+    handledAt: f.handledAt,
+    status: f.status,
+    detail: f.detail,
+    runId: f.runId,
+    usdc: f.usdc,
+  };
 }
 
 /**
@@ -486,15 +539,21 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (row.state !== "active") return json(res, { ran: false, reason: row.state });
     if (ticking.has(row.name)) return json(res, { ran: false, reason: "busy" });
 
+    // The tick itself is the proof of life: an agent counts as awake, and so
+    // can be reached by an event, for as long as its operator's tab is here.
+    store.markSeen(row.name);
+
     const entry = resolve(row.name);
     if (!entry) return json(res, { ran: false, reason: "unknown agent" });
     const cooldownMs = entry.strategy.cooldownSeconds * 1000;
     const sinceMs = Date.now() - store.lastRunAt(row.name);
+    const pending = store.firesPending(row.name);
     const verdict = decide({
       held: store.unresolvedPending().some((p) => p.agent === row.name),
       requested: false,
       paused: store.isPaused(row.name),
       once: false,
+      triggered: pending.length > 0,
       sinceLastRunMs: sinceMs,
       cooldownMs,
     });
@@ -511,6 +570,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       pilotClient ??= circle();
       const strategist =
         entry.strategy.llm.enabled && process.env.ANTHROPIC_API_KEY ? llmStrategist : heuristicStrategist;
+      if (verdict.trigger === "trigger") {
+        // Answering what already happened comes first, and does not spend the
+        // agent's own initiative: a reaction is not a scheduled run.
+        const handled = await runPendingFires(row.name, pilotClient, strategist, "pilot");
+        return json(res, {
+          ran: true,
+          trigger: "trigger",
+          handled,
+          nextInSeconds: 2,
+        });
+      }
       await runOnce(row.name, "pilot", pilotClient, strategist);
     } catch (err) {
       // runOnce records its own failures as runs; anything that still escapes
@@ -873,6 +943,95 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const consumed = store.confirmationConsume(row.name, id);
     if (consumed) store.chatAdd(row.name, "agent", `[cancelled #${id}] ${consumed.summary}`);
     return json(res, { cancelled: Boolean(consumed) });
+  }
+
+  /**
+   * The tab saying it is still here, and asking whether anything happened.
+   *
+   * This is the whole of the awake model for a visitor agent: while its
+   * operator's tab polls, the agent can be reached by an event; when the tab
+   * closes, events pass it by and are recorded as missed rather than queued.
+   * The call is a pair of indexed reads, cheap enough to make every few
+   * seconds, which is what keeps a reaction close to the thing it answers.
+   */
+  if (req.method === "POST" && url.pathname === "/pilot/pending") {
+    const body = await readJson(req);
+    const owner = String(body.owner ?? "").toLowerCase();
+    const mine = owner ? store.userAgentsListByOwner(owner) : [];
+    if (mine.length === 0) return json(res, { agents: [] });
+    const authErr = await verifyPilotGrant(body, owner);
+    if (authErr) return json(res, { error: authErr }, 403);
+
+    const flying = mine.filter((r) => r.state === "active" && !store.isPaused(r.name));
+    for (const r of flying) store.markSeen(r.name);
+    return json(res, {
+      agents: store.agentsWithPendingFires(flying.map((r) => r.name)),
+      awake: flying.map((r) => r.name),
+    });
+  }
+
+  // An agent's triggers, and what they have actually done.
+  if (req.method === "GET" && url.pathname === "/triggers") {
+    const owner = (url.searchParams.get("owner") ?? "").toLowerCase();
+    const row = ownedAgent(owner, url.searchParams.get("handle") ?? "");
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    return json(res, {
+      triggers: store.triggersOf(row.name).map((t) => triggerJson(t)),
+      recentFires: store.firesOf(row.name, 20).map(fireJson),
+    });
+  }
+
+  if (req.method === "POST" && url.pathname.startsWith("/triggers/")) {
+    const body = await readJson(req);
+    const row = ownedAgent(String(body.owner ?? ""), String(body.handle ?? ""));
+    if (!row) return json(res, { error: "this wallet controls no such agent" }, 404);
+    const op = url.pathname.slice("/triggers/".length);
+
+    if (op === "add") {
+      const plan = planTrigger(row.name, {
+        targetHandle: String(body.targetHandle ?? ""),
+        event: String(body.event ?? "market_launched") as store.TriggerEvent,
+        mode: String(body.mode ?? "watch") as store.TriggerMode,
+        sizing: (body.sizing ?? null) as store.TriggerSizing,
+        amountUsdc: body.amountUsdc === undefined || body.amountUsdc === null ? null : BigInt(String(body.amountUsdc)),
+        proportionBps: body.proportionBps === undefined ? null : Number(body.proportionBps),
+        overrideRisk: body.overrideRisk === true,
+      });
+      if ("error" in plan) return json(res, { error: plan.error }, 400);
+
+      // A trigger that may cross the agent's own limits is a standing
+      // authority over money, granted now for actions nobody has seen yet.
+      // That is the one thing the wallet still signs.
+      const err = plan.request.overrideRisk
+        ? await verifyOwnerAction(
+            body,
+            `trigger override ${confirmationHash(JSON.stringify(plan.request, bigintSafe), plan.summary)}`,
+            row.name,
+            row.owner ?? "",
+          )
+        : await operatorAuth(body, row, "trigger add");
+      if (err) return json(res, { error: err }, 403);
+
+      try {
+        const id = createTrigger(row.name, plan.request);
+        return json(res, { id, summary: plan.summary });
+      } catch (e) {
+        return json(res, { error: e instanceof Error ? e.message : String(e) }, 400);
+      }
+    }
+
+    if (op === "toggle" || op === "delete") {
+      const err = await operatorAuth(body, row, `trigger ${op} #${Number(body.id ?? 0)}`);
+      if (err) return json(res, { error: err }, 403);
+      const id = Number(body.id ?? 0);
+      const ok =
+        op === "toggle"
+          ? store.triggerSetEnabled(row.name, id, body.enabled === true)
+          : store.triggerDelete(row.name, id);
+      return json(res, ok ? { ok: true } : { error: "no such trigger" }, ok ? 200 : 404);
+    }
+
+    return json(res, { error: "not found" }, 404);
   }
 
   if (req.method === "GET" && url.pathname === "/rules") {

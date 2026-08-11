@@ -1277,6 +1277,14 @@ export function eventsByMarket(marketId: bigint | string, limit = 50): PlatformE
   ).map(toEvent);
 }
 
+/** One event by its canonical key, for a fire that needs its source back. */
+export function eventById(id: string): PlatformEventRow | null {
+  const row = db.prepare(`SELECT ${EVENT_COLUMNS} FROM platform_events WHERE id = ?`).get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? toEvent(row) : null;
+}
+
 export function eventsCountByActor(wallet: string): number {
   const row = db
     .prepare("SELECT COUNT(*) n FROM platform_events WHERE actor_wallet = ?")
@@ -1301,6 +1309,414 @@ export function txIsTriggerOrigin(txHash: string): boolean {
     )
     .get(txHash.toLowerCase()) as { ok: number } | undefined;
   return Boolean(row);
+}
+
+/**
+ * One agent watching another.
+ *
+ * A trigger is the executable form of "buy every coin @mfmf launches". It is
+ * deliberately not free text: prose binds only the model, and the model is not
+ * always the one deciding — when the daily inference budget runs out the
+ * heuristic takes over and reads no rules at all, which is how an operator's
+ * instruction can quietly stop being honoured halfway through a day.
+ *
+ * Every trigger carries its own limits. A standing instruction that may cross
+ * the agent's normal risk settings is a blank cheque without them, and the one
+ * thing a follower must never be is unbounded: the daily budget and the
+ * per-action cap are what make "mirror @mfmf" a decision rather than a leak.
+ * The contract's hard guardrails sit above all of it and are not negotiable.
+ *
+ * The target is stored as a handle because that is what the operator said and
+ * what stays constant here: an ERC-8004 id arrives only after the identity
+ * sweep and is null for a fresh agent, so a rule keyed on it could not be
+ * written at all for the agent someone most wants to follow.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS agent_triggers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    target_handle TEXT NOT NULL,
+    event TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    sizing TEXT,
+    amount_usdc TEXT,
+    proportion_bps INTEGER,
+    daily_budget_usdc TEXT NOT NULL,
+    max_action_usdc TEXT NOT NULL,
+    override_risk INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS agent_triggers_target ON agent_triggers(target_handle, enabled);
+
+  CREATE TABLE IF NOT EXISTS trigger_fires (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger_id INTEGER NOT NULL,
+    agent TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    handled_at INTEGER,
+    status TEXT NOT NULL,
+    run_id INTEGER,
+    usdc TEXT,
+    detail TEXT,
+    UNIQUE(trigger_id, event_id)
+  );
+  CREATE INDEX IF NOT EXISTS trigger_fires_agent ON trigger_fires(agent, id DESC);
+  CREATE INDEX IF NOT EXISTS trigger_fires_status ON trigger_fires(status, id DESC);
+`);
+
+/** What the follower does when the target acts. */
+export type TriggerMode = "watch" | "evaluate" | "mirror";
+/** Which of the target's actions it reacts to. */
+export type TriggerEvent = "market_launched" | "buy" | "sell" | "any";
+/** How a mirrored trade is sized against the one it follows. */
+export type TriggerSizing = "same_amount" | "fixed" | "proportional" | null;
+
+export type TriggerFireStatus =
+  | "pending"
+  | "running"
+  | "executed"
+  | "skipped"
+  | "rejected"
+  | "failed"
+  | "observed"
+  | "missed_offline"
+  | "expired";
+
+export interface TriggerRow {
+  id: number;
+  agent: string;
+  targetHandle: string;
+  event: TriggerEvent;
+  mode: TriggerMode;
+  sizing: TriggerSizing;
+  amountUsdc: bigint | null;
+  proportionBps: number | null;
+  dailyBudgetUsdc: bigint;
+  maxActionUsdc: bigint;
+  overrideRisk: boolean;
+  expiresAt: number | null;
+  enabled: boolean;
+  createdAt: number;
+}
+
+export interface TriggerFireRow {
+  id: number;
+  triggerId: number;
+  agent: string;
+  eventId: string;
+  createdAt: number;
+  handledAt: number | null;
+  status: TriggerFireStatus;
+  runId: number | null;
+  usdc: string | null;
+  detail: string | null;
+}
+
+export const MAX_TRIGGERS_PER_AGENT = 10;
+
+function toTrigger(r: Record<string, unknown>): TriggerRow {
+  return {
+    id: Number(r.id),
+    agent: String(r.agent),
+    targetHandle: String(r.target_handle),
+    event: String(r.event) as TriggerEvent,
+    mode: String(r.mode) as TriggerMode,
+    sizing: (r.sizing as TriggerSizing) ?? null,
+    amountUsdc: r.amount_usdc === null || r.amount_usdc === undefined ? null : BigInt(String(r.amount_usdc)),
+    proportionBps: r.proportion_bps === null || r.proportion_bps === undefined ? null : Number(r.proportion_bps),
+    dailyBudgetUsdc: BigInt(String(r.daily_budget_usdc)),
+    maxActionUsdc: BigInt(String(r.max_action_usdc)),
+    overrideRisk: Number(r.override_risk) === 1,
+    expiresAt: r.expires_at === null || r.expires_at === undefined ? null : Number(r.expires_at),
+    enabled: Number(r.enabled) === 1,
+    createdAt: Number(r.created_at),
+  };
+}
+
+function toFire(r: Record<string, unknown>): TriggerFireRow {
+  return {
+    id: Number(r.id),
+    triggerId: Number(r.trigger_id),
+    agent: String(r.agent),
+    eventId: String(r.event_id),
+    createdAt: Number(r.created_at),
+    handledAt: r.handled_at === null || r.handled_at === undefined ? null : Number(r.handled_at),
+    status: String(r.status) as TriggerFireStatus,
+    runId: r.run_id === null || r.run_id === undefined ? null : Number(r.run_id),
+    usdc: r.usdc === null || r.usdc === undefined ? null : String(r.usdc),
+    detail: r.detail === null || r.detail === undefined ? null : String(r.detail),
+  };
+}
+
+export function triggerCreate(t: {
+  agent: string;
+  targetHandle: string;
+  event: TriggerEvent;
+  mode: TriggerMode;
+  sizing: TriggerSizing;
+  amountUsdc: bigint | null;
+  proportionBps: number | null;
+  dailyBudgetUsdc: bigint;
+  maxActionUsdc: bigint;
+  overrideRisk: boolean;
+  expiresAt: number | null;
+}): number {
+  const live = triggersOf(t.agent).length;
+  if (live >= MAX_TRIGGERS_PER_AGENT) {
+    throw new Error(`an agent may hold at most ${MAX_TRIGGERS_PER_AGENT} triggers`);
+  }
+  const r = db
+    .prepare(
+      `INSERT INTO agent_triggers
+         (agent, target_handle, event, mode, sizing, amount_usdc, proportion_bps,
+          daily_budget_usdc, max_action_usdc, override_risk, expires_at, enabled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    )
+    .run(
+      t.agent,
+      t.targetHandle.toLowerCase(),
+      t.event,
+      t.mode,
+      t.sizing,
+      t.amountUsdc === null ? null : t.amountUsdc.toString(),
+      t.proportionBps,
+      t.dailyBudgetUsdc.toString(),
+      t.maxActionUsdc.toString(),
+      t.overrideRisk ? 1 : 0,
+      t.expiresAt,
+      Date.now(),
+    );
+  return Number(r.lastInsertRowid);
+}
+
+export function triggersOf(agent: string): TriggerRow[] {
+  return (
+    db.prepare("SELECT * FROM agent_triggers WHERE agent = ? ORDER BY id").all(agent) as Array<
+      Record<string, unknown>
+    >
+  ).map(toTrigger);
+}
+
+export function trigger(id: number): TriggerRow | null {
+  const row = db.prepare("SELECT * FROM agent_triggers WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? toTrigger(row) : null;
+}
+
+/** Live triggers watching a given handle — the matcher's index. */
+export function triggersWatching(targetHandle: string): TriggerRow[] {
+  return (
+    db
+      .prepare(
+        `SELECT * FROM agent_triggers
+         WHERE target_handle = ? AND enabled = 1
+           AND (expires_at IS NULL OR expires_at > ?)`,
+      )
+      .all(targetHandle.toLowerCase(), Date.now()) as Array<Record<string, unknown>>
+  ).map(toTrigger);
+}
+
+export function triggerSetEnabled(agent: string, id: number, enabled: boolean): boolean {
+  const r = db
+    .prepare("UPDATE agent_triggers SET enabled = ? WHERE id = ? AND agent = ?")
+    .run(enabled ? 1 : 0, id, agent);
+  return Number(r.changes ?? 0) > 0;
+}
+
+export function triggerDelete(agent: string, id: number): boolean {
+  const r = db.prepare("DELETE FROM agent_triggers WHERE id = ? AND agent = ?").run(id, agent);
+  return Number(r.changes ?? 0) > 0;
+}
+
+/**
+ * What this trigger has already spent today.
+ *
+ * Counted from what the fires actually moved rather than from what they
+ * intended, so a rejected attempt does not consume a budget it never used.
+ */
+export function triggerSpent24h(triggerId: number): bigint {
+  const rows = db
+    .prepare(
+      `SELECT usdc FROM trigger_fires
+       WHERE trigger_id = ? AND status = 'executed' AND created_at > ? AND usdc IS NOT NULL`,
+    )
+    .all(triggerId, Date.now() - 24 * 3600 * 1000) as Array<{ usdc: string }>;
+  return rows.reduce((acc, r) => acc + BigInt(r.usdc), 0n);
+}
+
+/**
+ * Record that a trigger matched an event, exactly once.
+ *
+ * The unique key is the whole dedupe story: the same launch, re-read after a
+ * restart or delivered twice by a reconnect, cannot produce a second buy.
+ * Returns null when this trigger has already seen this event.
+ */
+export function fireCreate(
+  triggerId: number,
+  agent: string,
+  eventId: string,
+  status: TriggerFireStatus,
+  detail?: string,
+): number | null {
+  const r = db
+    .prepare(
+      `INSERT OR IGNORE INTO trigger_fires (trigger_id, agent, event_id, created_at, status, detail)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(triggerId, agent, eventId, Date.now(), status, detail ?? null);
+  return Number(r.changes ?? 0) > 0 ? Number(r.lastInsertRowid) : null;
+}
+
+/**
+ * Take ownership of one fire, or find that somebody already has.
+ *
+ * Two loops can see the same pending row — the watcher and the scheduler, or a
+ * tab and the server — and the lease alone does not prevent the second from
+ * acting on a row the first has already finished. The claim is the atomic
+ * step: exactly one caller moves it out of 'pending', and only that caller
+ * executes. Without it, one launch could be bought twice.
+ */
+export function fireClaim(id: number): boolean {
+  const r = db
+    .prepare("UPDATE trigger_fires SET status = 'running' WHERE id = ? AND status = 'pending'")
+    .run(id);
+  return Number(r.changes ?? 0) > 0;
+}
+
+export function fireResolve(
+  id: number,
+  status: TriggerFireStatus,
+  detail: string,
+  extra?: { runId?: number | null; usdc?: bigint | null },
+): void {
+  db.prepare(
+    "UPDATE trigger_fires SET status = ?, detail = ?, handled_at = ?, run_id = ?, usdc = ? WHERE id = ?",
+  ).run(
+    status,
+    detail.slice(0, 400),
+    Date.now(),
+    extra?.runId ?? null,
+    extra?.usdc === null || extra?.usdc === undefined ? null : extra.usdc.toString(),
+    id,
+  );
+}
+
+/** Fires waiting for their agent to act, oldest first. */
+export function firesPending(agent?: string): TriggerFireRow[] {
+  const rows = agent
+    ? db
+        .prepare("SELECT * FROM trigger_fires WHERE status = 'pending' AND agent = ? ORDER BY id")
+        .all(agent)
+    : db.prepare("SELECT * FROM trigger_fires WHERE status = 'pending' ORDER BY id").all();
+  return (rows as Array<Record<string, unknown>>).map(toFire);
+}
+
+/** Which of an operator's agents have work waiting — the tab's cheap poll. */
+export function agentsWithPendingFires(agents: string[]): string[] {
+  if (agents.length === 0) return [];
+  const marks = agents.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT agent FROM trigger_fires WHERE status = 'pending' AND agent IN (${marks})`,
+    )
+    .all(...agents) as Array<{ agent: string }>;
+  return rows.map((r) => r.agent);
+}
+
+export function firesOf(agent: string, limit = 20): TriggerFireRow[] {
+  return (
+    db
+      .prepare("SELECT * FROM trigger_fires WHERE agent = ? ORDER BY id DESC LIMIT ?")
+      .all(agent, limit) as Array<Record<string, unknown>>
+  ).map(toFire);
+}
+
+export function firesForTrigger(triggerId: number, limit = 20): TriggerFireRow[] {
+  return (
+    db
+      .prepare("SELECT * FROM trigger_fires WHERE trigger_id = ? ORDER BY id DESC LIMIT ?")
+      .all(triggerId, limit) as Array<Record<string, unknown>>
+  ).map(toFire);
+}
+
+/**
+ * Retire fires nobody came back for.
+ *
+ * A trigger fires only while its agent is awake, and an agent whose tab closes
+ * mid-flight leaves work that must not be executed an hour later against prices
+ * that have moved. Expiring is the honest end for it: the record says the agent
+ * was not there, and nothing is silently queued.
+ */
+export function firesExpire(olderThanMs: number): number {
+  const cutoff = Date.now() - olderThanMs;
+  const r = db
+    .prepare(
+      `UPDATE trigger_fires SET status = 'expired', handled_at = ?,
+         detail = 'the agent was not awake long enough to act on this'
+       WHERE status = 'pending' AND created_at < ?`,
+    )
+    .run(Date.now(), cutoff);
+  // A claim whose process died leaves a row nobody will ever finish. It is
+  // retired rather than retried: the world it was answering is long gone.
+  const stuck = db
+    .prepare(
+      `UPDATE trigger_fires SET status = 'failed', handled_at = ?,
+         detail = 'the run that claimed this did not finish'
+       WHERE status = 'running' AND created_at < ?`,
+    )
+    .run(Date.now(), cutoff - olderThanMs);
+  return Number(r.changes ?? 0) + Number(stuck.changes ?? 0);
+}
+
+// ── liveness and mutual exclusion ──────────────────────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS agent_seen (agent TEXT PRIMARY KEY, at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS agent_lease (agent TEXT PRIMARY KEY, holder TEXT NOT NULL, until INTEGER NOT NULL);
+`);
+
+/** This agent is awake right now — stamped by whoever is flying it. */
+export function markSeen(agent: string): void {
+  db.prepare(
+    "INSERT INTO agent_seen (agent, at) VALUES (?, ?) ON CONFLICT(agent) DO UPDATE SET at = excluded.at",
+  ).run(agent, Date.now());
+}
+
+export function lastSeenAt(agent: string): number {
+  const row = db.prepare("SELECT at FROM agent_seen WHERE agent = ?").get(agent) as
+    | { at: number }
+    | undefined;
+  return row?.at ?? 0;
+}
+
+/**
+ * The right to run one agent, held across processes.
+ *
+ * Three processes share this ledger and now three things can want to run the
+ * same agent: the scheduler, an operator's tab, and an event that just fired.
+ * Two runs at once would each read the day's spend before the other recorded
+ * it and both would pass a cap neither should have. The lease is short and
+ * expires on its own, so a process that dies holding one does not strand an
+ * agent forever.
+ */
+export function leaseAcquire(agent: string, holder: string, ms: number): boolean {
+  const now = Date.now();
+  const r = db
+    .prepare(
+      `INSERT INTO agent_lease (agent, holder, until) VALUES (?, ?, ?)
+       ON CONFLICT(agent) DO UPDATE SET holder = excluded.holder, until = excluded.until
+       WHERE agent_lease.until <= ?`,
+    )
+    .run(agent, holder, now + ms, now);
+  return Number(r.changes ?? 0) > 0;
+}
+
+export function leaseRelease(agent: string, holder: string): void {
+  db.prepare("DELETE FROM agent_lease WHERE agent = ? AND holder = ?").run(agent, holder);
 }
 
 export function llmCallRecord(

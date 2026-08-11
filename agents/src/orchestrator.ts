@@ -14,6 +14,7 @@ import { llmStrategist } from "./llm-strategist.ts";
 import { ensureHandle, ensureIdentity } from "./identity.ts";
 import { advanceHistory } from "./history.ts";
 import { ingest } from "./events.ts";
+import { FIRE_TTL_MS, matchNewEvents, runPendingFires } from "./triggers.ts";
 import * as executor from "./executor.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
@@ -48,6 +49,23 @@ async function watchTheWorld(): Promise<void> {
       const r = await ingest();
       live = r.live;
       if (r.appended > 0) console.log(`world: +${r.appended} event(s) at block ${r.at}`);
+
+      // Matching is a cursor read over rows we just wrote, so it runs every
+      // tick regardless of whether anything new arrived — a fire created by
+      // another process still needs retiring when nobody came for it.
+      const matched = matchNewEvents();
+      if (matched.fired > 0 || matched.missed > 0) {
+        console.log(`world: ${matched.fired} trigger(s) fired, ${matched.missed} missed (agent asleep)`);
+      }
+      const expired = store.firesExpire(FIRE_TTL_MS);
+      if (expired > 0) console.log(`world: ${expired} trigger(s) expired unanswered`);
+
+      // House agents are awake here, so their reactions happen immediately
+      // rather than waiting for the next pass.
+      for (const agent of fullRoster()) {
+        if (agent.kind === "visitor" || agent.state !== "active") continue;
+        await runPendingFires(agent.name, client, strategistFor(agent), "watcher");
+      }
     } catch (err) {
       console.error(`world watch failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -178,6 +196,16 @@ async function pass(): Promise<void> {
   for (const agent of fullRoster()) {
     if (agent.kind === "visitor") continue;
     if (agent.state !== "active") continue;
+    // A house agent is awake for as long as this loop is running it, and that
+    // is what decides whether an event can reach it.
+    store.markSeen(agent.name);
+
+    // Anything a trigger already matched is answered first and without a run
+    // of its own — it is the reaction, not a new initiative.
+    await runPendingFires(agent.name, client, strategistFor(agent), "orchestrator").catch((err) =>
+      console.error(`${agent.name}: trigger work failed — ${err instanceof Error ? err.message : err}`),
+    );
+
     const isHeld = held.has(agent.name);
     const verdict = decide({
       held: isHeld,
@@ -190,7 +218,13 @@ async function pass(): Promise<void> {
       cooldownMs: agent.strategy.cooldownSeconds * 1000,
     });
     if (!verdict.run) continue;
-    await runOnce(agent.name, verdict.trigger, client, strategistFor(agent));
+    // One wallet, one run: the tab and the trigger lane hold the same lease.
+    if (!store.leaseAcquire(agent.name, "orchestrator", 180_000)) continue;
+    try {
+      await runOnce(agent.name, verdict.trigger, client, strategistFor(agent));
+    } finally {
+      store.leaseRelease(agent.name, "orchestrator");
+    }
   }
 }
 

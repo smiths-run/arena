@@ -171,3 +171,44 @@ test("a configured key with no failures and a long silence still raises a flag",
   assert.match(h.state, /has thought for|not running|caps/i);
   delete process.env.ANTHROPIC_API_KEY;
 });
+
+test("a key pasted with a newline or quotes is used clean, and reported", () => {
+  const had = process.env.ANTHROPIC_API_KEY;
+  const real = "sk-ant-" + "x".repeat(60);
+
+  process.env.ANTHROPIC_API_KEY = real + "\n";
+  assert.equal(inf.apiKey(), real, "a trailing newline must not reach the API");
+  assert.deepEqual(inf.keyShape(), { hasWhitespace: true, isQuoted: false, looksWellFormed: true });
+
+  process.env.ANTHROPIC_API_KEY = `"${real}"`;
+  assert.equal(inf.apiKey(), real, "quotes must not reach the API");
+  assert.equal(inf.keyShape()?.isQuoted, true);
+
+  process.env.ANTHROPIC_API_KEY = real;
+  assert.deepEqual(inf.keyShape(), { hasWhitespace: false, isQuoted: false, looksWellFormed: true });
+
+  process.env.ANTHROPIC_API_KEY = "not-a-key";
+  assert.equal(inf.keyShape()?.looksWellFormed, false);
+
+  if (had === undefined) delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = had;
+});
+
+test("a badly pasted key is called out before anything else in the state", () => {
+  const had = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = " sk-ant-" + "x".repeat(60) + " ";
+  assert.match(inf.health().state, /stray whitespace/i);
+  if (had === undefined) delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = had;
+});
+
+test("the key is never echoed back in any form", () => {
+  const had = process.env.ANTHROPIC_API_KEY;
+  const secret = "sk-ant-" + "z".repeat(60);
+  process.env.ANTHROPIC_API_KEY = secret;
+  const blob = JSON.stringify(inf.health());
+  assert.ok(!blob.includes(secret), "the whole key leaked");
+  assert.ok(!blob.includes("zzzz"), "part of the key leaked");
+  if (had === undefined) delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = had;
+});

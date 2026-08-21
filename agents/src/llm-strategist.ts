@@ -19,7 +19,7 @@ import { heuristicStrategist } from "./strategist.ts";
 import { PROPOSAL_SCHEMA, buildPrompt, toAction, type Proposal } from "./proposal.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
-import { classify } from "./inference.ts";
+import { apiKey, classify } from "./inference.ts";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5";
 /** Depth of reasoning per call; "low" keeps a 60s-cooldown loop affordable. */
@@ -43,7 +43,9 @@ export const llmStrategist: Strategist = async (input) => {
   }
 
   try {
-    client ??= new Anthropic();
+    // Cleaned rather than read raw: a stray newline in the dashboard is
+    // indistinguishable from a revoked key once Anthropic answers 401.
+    client ??= new Anthropic({ apiKey: apiKey() });
 
     const positions = store.positionsOf(input.agentName);
     const valued = await Promise.all(

@@ -258,8 +258,62 @@ export function keyConfigured(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
+/**
+ * The API key, as the API will actually see it.
+ *
+ * A key pasted into a dashboard picks things up on the way: a trailing newline
+ * from a copy, quotes from someone who thought the value needed them. None of
+ * it is visible when you compare the last four characters against the console,
+ * and all of it produces the same 401 as a revoked key — which is a very
+ * expensive way to lose a week.
+ *
+ * So the value is cleaned before it is used, and what had to be cleaned is
+ * reported, because a key that only works after cleaning is still a
+ * configuration bug somebody should fix at the source.
+ */
+export function apiKey(): string | undefined {
+  const raw = process.env.ANTHROPIC_API_KEY;
+  if (raw === undefined) return undefined;
+  return raw.trim().replace(/^["']|["']$/g, "");
+}
+
+export interface KeyShape {
+  /** Whitespace had to be trimmed off the configured value. */
+  hasWhitespace: boolean;
+  /** The value was wrapped in quotes. */
+  isQuoted: boolean;
+  /** It has the shape of an Anthropic key once cleaned. */
+  looksWellFormed: boolean;
+}
+
+/**
+ * What is wrong with the shape of the key, without revealing the key.
+ *
+ * Booleans only, and no length: enough to tell "somebody pasted it badly" from
+ * "the key itself is dead", and useless to anyone else. This endpoint is
+ * public.
+ */
+export function keyShape(): KeyShape | null {
+  const raw = process.env.ANTHROPIC_API_KEY;
+  if (raw === undefined) return null;
+  const trimmed = raw.trim();
+  const cleaned = trimmed.replace(/^["']|["']$/g, "");
+  return {
+    hasWhitespace: trimmed !== raw,
+    isQuoted: cleaned !== trimmed,
+    looksWellFormed: cleaned.startsWith("sk-ant-") && cleaned.length > 40,
+  };
+}
+
 export interface Health {
   keyConfigured: boolean;
+  /** Null when nothing is configured. Never contains any part of the key. */
+  key: KeyShape | null;
+  /**
+   * How long this process has been up. A variable changed more recently than
+   * this has not reached the running code, which looks exactly like a bad key.
+   */
+  uptimeHours: number;
   lastCallAt: number | null;
   hoursSinceLastCall: number | null;
   failures: store.LlmFailure[];
@@ -306,5 +360,26 @@ export function health(nowMs = Date.now(), quietHours = 6): Health {
     state = `Thinking normally; the last call was ${hours} hours ago.`;
   }
 
-  return { keyConfigured: configured, lastCallAt, hoursSinceLastCall: hours, failures, state };
+  const shape = keyShape();
+  if (shape && (shape.hasWhitespace || shape.isQuoted)) {
+    state =
+      "The configured key has " +
+      [shape.hasWhitespace && "stray whitespace", shape.isQuoted && "quotes around it"]
+        .filter(Boolean)
+        .join(" and ") +
+      ". It is cleaned before use, but fix it at the source. " +
+      state;
+  } else if (shape && !shape.looksWellFormed) {
+    state = "The configured key does not have the shape of an Anthropic key. " + state;
+  }
+
+  return {
+    keyConfigured: configured,
+    key: shape,
+    uptimeHours: Math.round((process.uptime() / 3600) * 10) / 10,
+    lastCallAt,
+    hoursSinceLastCall: hours,
+    failures,
+    state,
+  };
 }

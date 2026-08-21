@@ -24,7 +24,7 @@ import { describePlan, planTrigger } from "./triggers.ts";
 import * as feed from "./events.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
-import { classify, meaningOf } from "./inference.ts";
+import { apiKey, classify, meaningOf } from "./inference.ts";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5";
 const MAX_MESSAGES_PER_DAY = 40;
@@ -706,7 +706,7 @@ export async function handleChatMessage(
     );
   }
 
-  client ??= new Anthropic();
+  client ??= new Anthropic({ apiKey: apiKey() });
 
   // Recent context only: durable facts live in config and rules, not in chat
   // scrollback, so the window can stay small and cheap.

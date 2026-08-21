@@ -19,7 +19,7 @@ import { heuristicStrategist } from "./strategist.ts";
 import { PROPOSAL_SCHEMA, buildPrompt, toAction, type Proposal } from "./proposal.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
-import { apiKey, classify } from "./inference.ts";
+import { apiKey, classify, keyShape } from "./inference.ts";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5";
 /** Depth of reasoning per call; "low" keeps a 60s-cooldown loop affordable. */
@@ -100,7 +100,15 @@ export const llmStrategist: Strategist = async (input) => {
     });
   } catch (err) {
     const { kind, detail } = classify(err);
-    store.llmFailureRecord(input.agentName, kind, detail);
+    // The health endpoint reads the API process's environment, but this runs in
+    // the orchestrator's. When they disagree about the key, only this side ever
+    // sees it, so an auth failure carries its own view of the key's shape.
+    const shape = kind === "auth" || kind === "no_key" ? keyShape() : null;
+    store.llmFailureRecord(
+      input.agentName,
+      kind,
+      shape ? `${detail} [worker key: ${JSON.stringify(shape)}]` : detail,
+    );
     log(`llm strategist failed (${kind}), heuristic takes over — ${detail}`);
     return heuristicStrategist(input);
   }

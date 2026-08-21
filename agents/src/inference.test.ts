@@ -95,3 +95,79 @@ test("an empty window reports zero rather than dividing by it", () => {
   assert.equal(r.costUsdc, "0");
   assert.equal(r.costPerCallUsdc, "0");
 });
+
+// ── why thinking stops ──────────────────────────────────────────────────────
+
+test("an out-of-credit 400 is told apart from a malformed one", () => {
+  // Anthropic reports both as 400; only the message separates "pay the bill"
+  // from "fix the code", and confusing them wastes a day.
+  const credit = inf.classify({ status: 400, message: "Your credit balance is too low to access the API" });
+  assert.equal(credit.kind, "credit");
+  assert.equal(inf.classify({ status: 400, message: "messages.0: unexpected field" }).kind, "other");
+});
+
+test("the kinds a human can act on are separated", () => {
+  assert.equal(inf.classify({ status: 401, message: "invalid x-api-key" }).kind, "auth");
+  assert.equal(inf.classify({ status: 429, message: "rate limit" }).kind, "rate_limit");
+  assert.equal(inf.classify({ status: 529, message: "overloaded" }).kind, "overloaded");
+  assert.equal(inf.classify({ name: "APIConnectionError", message: "fetch failed" }).kind, "network");
+  assert.equal(inf.classify(new Error("llm stopped with max_tokens")).kind, "bad_response");
+});
+
+test("every kind has plain English, including one nobody planned for", () => {
+  for (const k of ["no_key", "auth", "credit", "rate_limit", "overloaded", "network", "bad_response", "other"]) {
+    assert.ok(inf.meaningOf(k).length > 10, k);
+  }
+  assert.equal(inf.meaningOf("something-new"), inf.meaningOf("other"));
+});
+
+test("a failure is counted once per kind, and remembers since when", () => {
+  store.llmFailureClear("anvil");
+  const before = Date.now();
+  store.llmFailureRecord("anvil", "credit", "Your credit balance is too low");
+  store.llmFailureRecord("anvil", "credit", "Your credit balance is too low");
+  store.llmFailureRecord("anvil", "credit", "Your credit balance is too low");
+
+  const rows = store.llmFailures().filter((f) => f.agent === "anvil");
+  assert.equal(rows.length, 1, "three identical failures are one row, not three");
+  assert.equal(rows[0].count, 3);
+  assert.ok(rows[0].firstAt >= before);
+  assert.ok(rows[0].lastAt >= rows[0].firstAt);
+});
+
+test("a success clears the alarm", () => {
+  store.llmFailureRecord("bellows", "auth", "invalid x-api-key");
+  assert.ok(store.llmFailures().some((f) => f.agent === "bellows"));
+  store.llmFailureClear("bellows");
+  assert.ok(!store.llmFailures().some((f) => f.agent === "bellows"));
+});
+
+test("health names the cause rather than reporting a silence", () => {
+  // A key must be present, or the missing key is the more important answer.
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  store.llmFailureClear("anvil");
+  store.llmFailureRecord("anvil", "credit", "Your credit balance is too low");
+  const h = inf.health();
+  assert.match(h.state, /out of credit/i);
+  assert.match(h.state, /since/i);
+  store.llmFailureClear("anvil");
+  delete process.env.ANTHROPIC_API_KEY;
+});
+
+test("a missing key is reported before anything else", () => {
+  const had = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  const h = inf.health();
+  assert.equal(h.keyConfigured, false);
+  assert.match(h.state, /no API key/i);
+  if (had !== undefined) process.env.ANTHROPIC_API_KEY = had;
+});
+
+test("a configured key with no failures and a long silence still raises a flag", () => {
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  for (const f of store.llmFailures()) store.llmFailureClear(f.agent);
+  // The calls recorded earlier in this file are "now", so pretend it is later.
+  const h = inf.health(Date.now() + 48 * 3_600_000);
+  assert.match(h.state, /has thought for|not running|caps/i);
+  delete process.env.ANTHROPIC_API_KEY;
+});

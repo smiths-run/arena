@@ -254,6 +254,27 @@ db.exec(`
     at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS llm_calls_agent ON llm_calls(agent, at);
+
+  -- Why an agent stopped thinking, and since when.
+  --
+  -- llm_calls only ever gets a row when a call succeeds, so a key that dies
+  -- leaves no trace at all: the strategist quietly falls back to the heuristic
+  -- and the ledger simply goes quiet. That is exactly how inference stopped for
+  -- a week without anyone noticing. This is the other half of the record.
+  --
+  -- One row per agent and kind rather than one per failure: a broken key fails
+  -- on every run, and a table that grows by thousands a day to say one thing is
+  -- worse than a counter that says it once, with a first_at that answers "since
+  -- when".
+  CREATE TABLE IF NOT EXISTS llm_health (
+    agent TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    first_at INTEGER NOT NULL,
+    last_at INTEGER NOT NULL,
+    PRIMARY KEY (agent, kind)
+  );
 `);
 
 // ── runs ────────────────────────────────────────────────────────────────────
@@ -1763,6 +1784,50 @@ export function llmUsage(
     tokensIn: r.tokens_in ?? 0,
     tokensOut: r.tokens_out ?? 0,
   }));
+}
+
+export interface LlmFailure {
+  agent: string;
+  kind: string;
+  detail: string;
+  count: number;
+  firstAt: number;
+  lastAt: number;
+}
+
+/** Note that a call failed, or that it is still failing the same way. */
+export function llmFailureRecord(agent: string, kind: string, detail: string): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO llm_health (agent, kind, detail, count, first_at, last_at)
+     VALUES (?, ?, ?, 1, ?, ?)
+     ON CONFLICT(agent, kind) DO UPDATE SET
+       count = count + 1, last_at = excluded.last_at, detail = excluded.detail`,
+  ).run(agent, kind, detail.slice(0, 300), now, now);
+}
+
+/** Clear an agent's failures — called when a call finally succeeds. */
+export function llmFailureClear(agent: string): void {
+  db.prepare("DELETE FROM llm_health WHERE agent = ?").run(agent);
+}
+
+export function llmFailures(): LlmFailure[] {
+  const rows = db
+    .prepare("SELECT * FROM llm_health ORDER BY last_at DESC")
+    .all() as Array<{
+    agent: string; kind: string; detail: string;
+    count: number; first_at: number; last_at: number;
+  }>;
+  return rows.map((r) => ({
+    agent: r.agent, kind: r.kind, detail: r.detail,
+    count: r.count, firstAt: r.first_at, lastAt: r.last_at,
+  }));
+}
+
+/** When any agent last thought successfully, or null if none ever has. */
+export function llmLastCallAt(): number | null {
+  const row = db.prepare("SELECT MAX(at) at FROM llm_calls").get() as { at: number | null };
+  return row.at ?? null;
 }
 
 export function llmCallsLast24h(agent: string): number {

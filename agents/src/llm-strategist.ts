@@ -19,6 +19,7 @@ import { heuristicStrategist } from "./strategist.ts";
 import { PROPOSAL_SCHEMA, buildPrompt, toAction, type Proposal } from "./proposal.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
+import { classify } from "./inference.ts";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5";
 /** Depth of reasoning per call; "low" keeps a 60s-cooldown loop affordable. */
@@ -30,6 +31,9 @@ export const llmStrategist: Strategist = async (input) => {
   const log = (msg: string) => console.log(`[${input.agentName}] ${msg}`);
 
   if (!process.env.ANTHROPIC_API_KEY) {
+    // Recorded, not just skipped: an agent running on its heuristic because
+    // nobody configured a key looks exactly like one that chose not to think.
+    store.llmFailureRecord(input.agentName, "no_key", "ANTHROPIC_API_KEY is not set");
     return heuristicStrategist(input);
   }
   const calls = store.llmCallsLast24h(input.agentName);
@@ -73,6 +77,7 @@ export const llmStrategist: Strategist = async (input) => {
     });
 
     store.llmCallRecord(input.agentName, MODEL, res.usage.input_tokens, res.usage.output_tokens);
+    store.llmFailureClear(input.agentName);
     log(
       `llm ${MODEL} call ${calls + 1}/${input.strategy.llm.maxCallsPerDay} — ` +
         `${res.usage.input_tokens} in / ${res.usage.output_tokens} out`,
@@ -92,7 +97,9 @@ export const llmStrategist: Strategist = async (input) => {
       strategy: input.strategy,
     });
   } catch (err) {
-    log(`llm strategist failed, heuristic takes over — ${err instanceof Error ? err.message : err}`);
+    const { kind, detail } = classify(err);
+    store.llmFailureRecord(input.agentName, kind, detail);
+    log(`llm strategist failed (${kind}), heuristic takes over — ${detail}`);
     return heuristicStrategist(input);
   }
 };

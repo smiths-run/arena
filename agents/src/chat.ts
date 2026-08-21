@@ -24,6 +24,7 @@ import { describePlan, planTrigger } from "./triggers.ts";
 import * as feed from "./events.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
+import { classify, meaningOf } from "./inference.ts";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5";
 const MAX_MESSAGES_PER_DAY = 40;
@@ -696,6 +697,7 @@ export async function handleChatMessage(
   };
 
   if (!process.env.ANTHROPIC_API_KEY) {
+    store.llmFailureRecord(entry.name, "no_key", "ANTHROPIC_API_KEY is not set");
     return finish("Chat is not available right now — the inference key is not configured on this deployment.");
   }
   if (store.chatOperatorMessagesLast24h(entry.name) > MAX_MESSAGES_PER_DAY) {
@@ -724,6 +726,13 @@ export async function handleChatMessage(
         tools: TOOLS,
         messages,
       });
+
+      // Chat is inference too, and it was the half nobody was counting. An
+      // operator talking to their agent costs real money; leaving it out of the
+      // ledger made the cost report quietly wrong in the agent's favour. Each
+      // round of the tool loop is its own call, so each one is its own row.
+      store.llmCallRecord(entry.name, MODEL, response.usage.input_tokens, response.usage.output_tokens);
+      store.llmFailureClear(entry.name);
 
       const toolUses = response.content.filter(
         (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
@@ -759,8 +768,11 @@ export async function handleChatMessage(
     }
     return finish("I ran out of thinking budget for this message — ask me again, more specifically.");
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return finish(`I could not think that through — inference failed (${msg.slice(0, 120)}). Try again shortly.`);
+    const { kind, detail } = classify(err);
+    store.llmFailureRecord(entry.name, kind, detail);
+    // The operator is owed the reason, not a shrug: "out of credit" and "busy,
+    // try again" ask completely different things of them.
+    return finish(`I could not think that through — ${meaningOf(kind)}. (${detail.slice(0, 100)})`);
   }
 }
 

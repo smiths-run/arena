@@ -23,7 +23,7 @@ import {
 import { executeOperatorAction, executeWithdrawal, withdrawable } from "./operator.ts";
 import type { PolicyConflict } from "./policy.ts";
 import { equityOf } from "./equity.ts";
-import { usage as inferenceUsage } from "./inference.ts";
+import { health as inferenceHealth, usage as inferenceUsage } from "./inference.ts";
 import { runOnce } from "./runtime.ts";
 import { historyStatus } from "./history.ts";
 import { decide } from "./schedule.ts";
@@ -956,7 +956,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const raw = Number(url.searchParams.get("hours") ?? "24");
     const hours = Number.isFinite(raw) && raw >= 0 ? Math.min(raw, 24 * 365) : 24;
     const since = hours === 0 ? 0 : Date.now() - hours * 3_600_000;
-    return json(res, inferenceUsage(since));
+    return json(res, { health: inferenceHealth(), ...inferenceUsage(since) });
   }
 
   if (url.pathname === "/intel") {

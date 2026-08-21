@@ -172,3 +172,131 @@ export function usage(sinceMs: number, nowMs = Date.now()): UsageReport {
     note: NOTE,
   };
 }
+
+
+// ── why thinking stops ──────────────────────────────────────────────────────
+
+/**
+ * What kind of failure this was, in one word.
+ *
+ * The distinction that matters operationally is not the stack trace, it is
+ * whether somebody needs to top up an account, replace a key, or simply wait.
+ * These are the answers to that question, and they are deliberately few.
+ */
+export type FailureKind =
+  | "no_key"        // nothing configured; the model was never reached
+  | "auth"          // the key was rejected
+  | "credit"        // the account is out of money
+  | "rate_limit"    // too many requests, for now
+  | "overloaded"    // the model is busy, for now
+  | "network"       // it never got there
+  | "bad_response"  // it answered, but not with something usable
+  | "other";
+
+/** Plain English for each, in the present tense, for a human reading a status. */
+const MEANING: Record<FailureKind, string> = {
+  no_key: "no API key is configured on this deployment",
+  auth: "the API key is being rejected",
+  credit: "the Anthropic account is out of credit",
+  rate_limit: "requests are being rate limited",
+  overloaded: "the model is overloaded",
+  network: "the request is not reaching Anthropic",
+  bad_response: "the model answers but not in a usable shape",
+  other: "calls are failing",
+};
+
+export function meaningOf(kind: string): string {
+  return MEANING[kind as FailureKind] ?? MEANING.other;
+}
+
+/**
+ * Sort an error into one of the kinds above.
+ *
+ * Status codes carry most of it; the out-of-credit case is the exception,
+ * because Anthropic reports it as an ordinary 400 and only the message
+ * distinguishes it from a malformed request. That one is worth catching
+ * precisely: it is the difference between "somebody pay the bill" and
+ * "somebody fix the code".
+ */
+export function classify(err: unknown): { kind: FailureKind; detail: string } {
+  const e = err as { status?: number; message?: string; name?: string };
+  const detail = (e?.message ?? String(err)).slice(0, 300);
+  const msg = detail.toLowerCase();
+
+  if (msg.includes("credit balance") || msg.includes("insufficient_quota") || msg.includes("billing")) {
+    return { kind: "credit", detail };
+  }
+  switch (e?.status) {
+    case 401:
+    case 403:
+      return { kind: "auth", detail };
+    case 429:
+      return { kind: "rate_limit", detail };
+    case 529:
+    case 503:
+      return { kind: "overloaded", detail };
+  }
+  if (msg.includes("api key") || msg.includes("apikey")) return { kind: "auth", detail };
+  if (
+    e?.name === "APIConnectionError" ||
+    e?.name === "APIConnectionTimeoutError" ||
+    msg.includes("timeout") ||
+    msg.includes("econnreset") ||
+    msg.includes("enotfound") ||
+    msg.includes("fetch failed")
+  ) {
+    return { kind: "network", detail };
+  }
+  if (msg.includes("stopped with") || msg.includes("no text block") || msg.includes("json")) {
+    return { kind: "bad_response", detail };
+  }
+  return { kind: "other", detail };
+}
+
+/** True when a key is present at all. Never reveals any part of it. */
+export function keyConfigured(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY);
+}
+
+export interface Health {
+  keyConfigured: boolean;
+  lastCallAt: number | null;
+  hoursSinceLastCall: number | null;
+  failures: store.LlmFailure[];
+  /** One sentence a human can act on without reading the rest. */
+  state: string;
+}
+
+/**
+ * Whether the agents are thinking, and if not, why not.
+ *
+ * This exists because the honest answer to "is inference working?" was, for a
+ * week, unavailable to anyone who was not tailing the logs at the right moment.
+ */
+export function health(nowMs = Date.now(), quietHours = 6): Health {
+  const configured = keyConfigured();
+  const lastCallAt = store.llmLastCallAt();
+  const failures = store.llmFailures();
+  const hours = lastCallAt === null ? null : Math.round(((nowMs - lastCallAt) / 3_600_000) * 10) / 10;
+
+  let state: string;
+  if (!configured) {
+    state = "Not thinking: " + MEANING.no_key + ". Every agent is running on its heuristic.";
+  } else if (failures.length > 0) {
+    const worst = failures.reduce((a, b) => (a.count >= b.count ? a : b));
+    const since = new Date(worst.firstAt).toISOString().replace("T", " ").slice(0, 16);
+    state =
+      `Not thinking reliably: ${meaningOf(worst.kind)} — ${worst.count} failures ` +
+      `since ${since} UTC. Agents fall back to their heuristic when a call fails.`;
+  } else if (lastCallAt === null) {
+    state = "No agent has ever called the model on this deployment.";
+  } else if (hours !== null && hours > quietHours) {
+    state =
+      `A key is configured and nothing is failing, but no agent has thought for ${hours} hours. ` +
+      "Either the daily caps are spent or the agents are not running.";
+  } else {
+    state = `Thinking normally; the last call was ${hours} hours ago.`;
+  }
+
+  return { keyConfigured: configured, lastCallAt, hoursSinceLastCall: hours, failures, state };
+}

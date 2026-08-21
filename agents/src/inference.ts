@@ -285,9 +285,17 @@ export function health(nowMs = Date.now(), quietHours = 6): Health {
   } else if (failures.length > 0) {
     const worst = failures.reduce((a, b) => (a.count >= b.count ? a : b));
     const since = new Date(worst.firstAt).toISOString().replace("T", " ").slice(0, 16);
+    const times = worst.count === 1 ? "once" : `${worst.count} times`;
+    // Two different clocks, and conflating them sends people looking in the
+    // wrong week: firstAt is when this record began, while the last successful
+    // call is when the thinking actually stopped.
+    const broke =
+      hours === null
+        ? "no agent has ever thought on this deployment"
+        : `the last successful call was ${hours} hours ago`;
     state =
-      `Not thinking reliably: ${meaningOf(worst.kind)} — ${worst.count} failures ` +
-      `since ${since} UTC. Agents fall back to their heuristic when a call fails.`;
+      `Not thinking: ${meaningOf(worst.kind)}. Seen ${times} since ${since} UTC, ` +
+      `and ${broke}. Agents fall back to their heuristic when a call fails.`;
   } else if (lastCallAt === null) {
     state = "No agent has ever called the model on this deployment.";
   } else if (hours !== null && hours > quietHours) {

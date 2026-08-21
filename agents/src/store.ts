@@ -1730,6 +1730,41 @@ export function llmCallRecord(
   ).run(agent, model, tokensIn, tokensOut, Date.now());
 }
 
+/**
+ * Priced-per-call inference, grouped by agent and model.
+ *
+ * The daily cap only ever needed a count, so a count is all this table was
+ * asked for until now. Reporting what thinking actually costs needs the tokens
+ * too, and needs them grouped rather than row by row — there is one row per
+ * call and an agent that has been running for a week has thousands.
+ */
+export function llmUsage(
+  sinceMs: number,
+): Array<{ agent: string; model: string; calls: number; tokensIn: number; tokensOut: number }> {
+  const rows = db
+    .prepare(
+      `SELECT agent, model, COUNT(*) calls,
+              SUM(tokens_in) tokens_in, SUM(tokens_out) tokens_out
+       FROM llm_calls
+       WHERE at > ?
+       GROUP BY agent, model`,
+    )
+    .all(sinceMs) as Array<{
+    agent: string;
+    model: string;
+    calls: number;
+    tokens_in: number | null;
+    tokens_out: number | null;
+  }>;
+  return rows.map((r) => ({
+    agent: r.agent,
+    model: r.model,
+    calls: r.calls,
+    tokensIn: r.tokens_in ?? 0,
+    tokensOut: r.tokens_out ?? 0,
+  }));
+}
+
 export function llmCallsLast24h(agent: string): number {
   const row = db
     .prepare("SELECT COUNT(*) n FROM llm_calls WHERE agent = ? AND at > ?")

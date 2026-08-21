@@ -62,6 +62,35 @@ interface RawTrade {
   blockNumber: string;
 }
 
+/**
+ * Whether the desk can actually produce a report for this market.
+ *
+ * The paywall settles payment before the handler runs, so anything that fails
+ * inside buildReport fails *after* the buyer has paid. This is the cheap check
+ * that runs first: it costs one request and it catches the two ways the desk
+ * realistically fails a paying customer — a market id that does not exist, and
+ * an upstream that is down.
+ *
+ * It deliberately re-fetches what buildReport will fetch again rather than
+ * threading state through the paywall. One extra read is a small price for
+ * keeping the money and the work in the right order.
+ */
+export async function canBuildReport(
+  marketId: string,
+): Promise<{ ok: true } | { ok: false; status: 404 | 503; reason: string }> {
+  if (!/^\d+$/.test(marketId)) {
+    return { ok: false, status: 404, reason: `"${marketId}" is not a market id` };
+  }
+  try {
+    await api<RawMarket>(`/api/markets/${marketId}`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("-> 404")) return { ok: false, status: 404, reason: `no market ${marketId}` };
+    return { ok: false, status: 503, reason: `the desk cannot read the chain right now (${msg})` };
+  }
+}
+
 async function api<T>(path: string): Promise<T> {
   const res = await fetch(`${INDEXER}${path}`, { cache: "no-store" } as RequestInit);
   if (!res.ok) throw new Error(`indexer ${path} -> ${res.status}`);

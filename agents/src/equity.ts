@@ -16,10 +16,17 @@
  *
  * A run's net result is closing equity minus opening equity. Nothing external
  * moves during a run, so that delta is the run's true economic outcome and it
- * cannot omit a cost: gas leaves the wallet, an x402 payment leaves the Gateway
- * balance, a purchase converts USDC into a position priced at what it could be
- * sold for, and inference — once a model is in the loop — leaves the wallet like
- * anything else.
+ * cannot omit a cost that leaves the agent: gas leaves the wallet, an x402
+ * payment leaves the Gateway balance, and a purchase converts USDC into a
+ * position priced at what it could be sold for.
+ *
+ * Inference is the exception, and it is worth being exact about it rather than
+ * letting the sentence above imply more than it earns. The model runs on the
+ * platform's own API key, so thinking costs an agent nothing and this delta
+ * does not include it — see inference.ts, which prices what has been spent.
+ * The fix is not a new category here; it is the agent paying for its thinking
+ * the way it already pays for a report, so the money leaves the two balances
+ * this function is already measuring.
  *
  * Positions are valued at their **liquidation** price, not their marginal price.
  * On a bonding curve, selling a position moves the price against you; quoting the

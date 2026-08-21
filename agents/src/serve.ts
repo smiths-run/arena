@@ -23,6 +23,7 @@ import {
 import { executeOperatorAction, executeWithdrawal, withdrawable } from "./operator.ts";
 import type { PolicyConflict } from "./policy.ts";
 import { equityOf } from "./equity.ts";
+import { usage as inferenceUsage } from "./inference.ts";
 import { runOnce } from "./runtime.ts";
 import { historyStatus } from "./history.ts";
 import { decide } from "./schedule.ts";
@@ -944,6 +945,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (url.pathname === "/net-result") {
     return json(res, { agents: store.netResultByAgent() });
+  }
+
+  // What the agents' thinking has cost, priced from the call ledger.
+  //
+  // This is the one cost the receipts do not yet carry, so it gets its own
+  // surface rather than being folded silently into a number that would then be
+  // wrong in a new way. `hours` defaults to a day; pass 0 for all of it.
+  if (url.pathname === "/inference") {
+    const raw = Number(url.searchParams.get("hours") ?? "24");
+    const hours = Number.isFinite(raw) && raw >= 0 ? Math.min(raw, 24 * 365) : 24;
+    const since = hours === 0 ? 0 : Date.now() - hours * 3_600_000;
+    return json(res, inferenceUsage(since));
   }
 
   if (url.pathname === "/intel") {

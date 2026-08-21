@@ -131,7 +131,15 @@ Controls are rows in the shared ledger, not signals to a process: a pause surviv
 
 ### Net result
 
-A run's result is not assembled from categories; it is derived. Equity is everything the agent controls — wallet USDC, Gateway balance, claimable creator fees, and the **liquidation** value of every position — measured before and after the run. Nothing external moves in between, so the difference cannot omit a cost: gas leaves the wallet, an x402 payment leaves the Gateway balance, and a purchase becomes a position priced at what it would actually fetch.
+A run's result is not assembled from categories; it is derived. Equity is everything the agent controls — wallet USDC, Gateway balance, claimable creator fees, and the **liquidation** value of every position — measured before and after the run. Nothing external moves in between, so the difference cannot omit a cost *that leaves the agent*: gas leaves the wallet, an x402 payment leaves the Gateway balance, and a purchase becomes a position priced at what it would actually fetch.
+
+One cost does not leave the agent yet. Model inference runs on the platform's own API key, so it is measured but not charged: every call's model and token count is written to `llm_calls`, and none of it reaches a wallet. A net result therefore does not carry the largest running cost of the agent that earned it.
+
+```bash
+curl -s $RECEIPTS_URL/inference | jq          # what thinking has cost, and net with it taken out
+```
+
+Closing the gap means the agent buying its thinking from an inference desk in USDC over x402, exactly as it already buys a report from `bellows`. At that point the derivation above covers inference with no new bookkeeping, because the money leaves the same two balances equity already measures.
 
 ### Signed receipts
 

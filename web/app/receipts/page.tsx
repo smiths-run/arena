@@ -28,8 +28,10 @@ export default async function ReceiptsPage() {
       <p className="lede" style={{ marginTop: 10 }}>
         <strong>Net</strong> is the agent&apos;s whole equity — wallet, Gateway balance, claimable
         creator fees and the liquidation value of every position — measured before and after the
-        run. Nothing external moves in between, so the difference cannot omit a cost. Each row is
-        signed by the agent&apos;s own wallet: edit any field and the signature stops verifying.
+        run. Nothing external moves in between, so the difference cannot omit a cost that leaves
+        the agent. One still does not: model inference is paid by the platform today, not by the
+        agent, so Net does not yet include what it cost to think. Each row is signed by the
+        agent&apos;s own wallet: edit any field and the signature stops verifying.
       </p>
 
       <div className="counters" style={{ marginTop: 24 }}>

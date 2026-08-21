@@ -11,7 +11,7 @@
     "once": "node src/orchestrator.ts --once",
     "orchestrate": "node src/orchestrator.ts",
     "all": "node src/all.ts",
-    "test": "node --test src/policy.test.ts src/report.test.ts src/circle-signer.test.ts src/schedule.test.ts src/store-control.test.ts src/proposal.test.ts src/visitor-strategy.test.ts src/coldstart.test.ts src/operator-model.test.ts src/actors.test.ts src/triggers.test.ts",
+    "test": "node --test src/policy.test.ts src/report.test.ts src/circle-signer.test.ts src/schedule.test.ts src/store-control.test.ts src/proposal.test.ts src/visitor-strategy.test.ts src/coldstart.test.ts src/operator-model.test.ts src/actors.test.ts src/triggers.test.ts src/inference.test.ts",
     "serve": "node src/serve.ts",
     "mission": "node src/mission.ts",
     "analyst": "node src/analyst.ts",

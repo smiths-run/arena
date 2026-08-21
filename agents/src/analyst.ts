@@ -16,7 +16,7 @@ import "dotenv/config";
 import express from "express";
 import { createGatewayMiddleware } from "@circle-fin/x402-batching/server";
 import { AGENTS } from "./shared.ts";
-import { buildReport } from "./report.ts";
+import { buildReport, canBuildReport } from "./report.ts";
 import * as store from "./store.ts";
 
 const PORT = Number(process.env.ANALYST_PORT ?? 42071);
@@ -77,7 +77,30 @@ app.get("/preview/:marketId", async (req, res) => {
   }
 });
 
-app.get("/report/:marketId", gateway.require(PRICE), async (req, res) => {
+/**
+ * Refuse before charging, not after.
+ *
+ * `gateway.require` settles the payment before the handler runs, so a report
+ * that cannot be built leaves the buyer paid-up and empty-handed. This guard
+ * sits in front of the paywall and turns the two realistic failures — an
+ * unknown market, an upstream that is down — into an honest 404 or 503 that
+ * costs nobody anything.
+ *
+ * It does not make the desk infallible: something can still break between this
+ * check and the report itself, and that case is logged loudly below so it can
+ * be made good rather than disappearing into a 502.
+ */
+const feasible: express.RequestHandler<{ marketId: string }> = (req, res, next) => {
+  canBuildReport(req.params.marketId)
+    .then((v) => {
+      if (v.ok) return next();
+      console.log(`refused before charging: ${req.params.marketId} — ${v.reason}`);
+      res.status(v.status).json({ error: v.reason, charged: false });
+    })
+    .catch(next);
+};
+
+app.get("/report/:marketId", feasible, gateway.require(PRICE), async (req, res) => {
   const payment = (req as { payment?: Record<string, unknown> }).payment;
   try {
     const report = await buildReport(req.params.marketId);

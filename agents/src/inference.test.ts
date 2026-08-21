@@ -178,14 +178,14 @@ test("a key pasted with a newline or quotes is used clean, and reported", () => 
 
   process.env.ANTHROPIC_API_KEY = real + "\n";
   assert.equal(inf.apiKey(), real, "a trailing newline must not reach the API");
-  assert.deepEqual(inf.keyShape(), { hasWhitespace: true, isQuoted: false, looksWellFormed: true });
+  assert.deepEqual(inf.keyShape(), { hasWhitespace: true, isQuoted: false, looksWellFormed: true, credential: "unknown" });
 
   process.env.ANTHROPIC_API_KEY = `"${real}"`;
   assert.equal(inf.apiKey(), real, "quotes must not reach the API");
   assert.equal(inf.keyShape()?.isQuoted, true);
 
   process.env.ANTHROPIC_API_KEY = real;
-  assert.deepEqual(inf.keyShape(), { hasWhitespace: false, isQuoted: false, looksWellFormed: true });
+  assert.deepEqual(inf.keyShape(), { hasWhitespace: false, isQuoted: false, looksWellFormed: true, credential: "unknown" });
 
   process.env.ANTHROPIC_API_KEY = "not-a-key";
   assert.equal(inf.keyShape()?.looksWellFormed, false);
@@ -209,6 +209,22 @@ test("the key is never echoed back in any form", () => {
   const blob = JSON.stringify(inf.health());
   assert.ok(!blob.includes(secret), "the whole key leaked");
   assert.ok(!blob.includes("zzzz"), "part of the key leaked");
+  if (had === undefined) delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = had;
+});
+
+test("an OAuth token is told apart from an API key", () => {
+  const had = process.env.ANTHROPIC_API_KEY;
+
+  process.env.ANTHROPIC_API_KEY = "sk-ant-api03-" + "x".repeat(60);
+  assert.equal(inf.keyShape()?.credential, "api");
+
+  // The one that passes every superficial check and then 401s on every call.
+  process.env.ANTHROPIC_API_KEY = "sk-ant-oat01-" + "x".repeat(60);
+  assert.equal(inf.keyShape()?.credential, "oauth");
+  assert.equal(inf.keyShape()?.looksWellFormed, true, "it does look well formed — that is the trap");
+  assert.match(inf.health().state, /OAuth token, not an API key/i);
+
   if (had === undefined) delete process.env.ANTHROPIC_API_KEY;
   else process.env.ANTHROPIC_API_KEY = had;
 });

@@ -284,6 +284,15 @@ export interface KeyShape {
   isQuoted: boolean;
   /** It has the shape of an Anthropic key once cleaned. */
   looksWellFormed: boolean;
+  /**
+   * Which kind of credential this is.
+   *
+   * An OAuth token and an API key both begin sk-ant- and are both long, so a
+   * token pasted where a key belongs passes every superficial check and then
+   * fails authentication on every call — the exact symptom of a revoked key,
+   * for a completely different reason. Only the Messages API can use "api".
+   */
+  credential: "api" | "oauth" | "unknown";
 }
 
 /**
@@ -298,10 +307,16 @@ export function keyShape(): KeyShape | null {
   if (raw === undefined) return null;
   const trimmed = raw.trim();
   const cleaned = trimmed.replace(/^["']|["']$/g, "");
+  const credential = cleaned.includes("sk-ant-api")
+    ? "api"
+    : cleaned.includes("sk-ant-oat") || cleaned.includes("sk-ant-ort")
+      ? "oauth"
+      : "unknown";
   return {
     hasWhitespace: trimmed !== raw,
     isQuoted: cleaned !== trimmed,
     looksWellFormed: cleaned.startsWith("sk-ant-") && cleaned.length > 40,
+    credential,
   };
 }
 
@@ -369,6 +384,10 @@ export function health(nowMs = Date.now(), quietHours = 6): Health {
         .join(" and ") +
       ". It is cleaned before use, but fix it at the source. " +
       state;
+  } else if (shape && shape.credential === "oauth") {
+    state =
+      "The configured credential is an OAuth token, not an API key. The Messages " +
+      "API only accepts a key beginning sk-ant-api. " + state;
   } else if (shape && !shape.looksWellFormed) {
     state = "The configured key does not have the shape of an Anthropic key. " + state;
   }

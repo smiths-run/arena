@@ -141,8 +141,23 @@ export async function buyThought(req: ThoughtRequest): Promise<Thought> {
   const out = (await res.json()) as {
     text: string;
     stopReason: string | null;
-    usage: { inputTokens: number; outputTokens: number };
+    model?: string;
+    usage: { inputTokens: number; outputTokens: number; cacheWrite: number; cacheRead: number };
   };
+
+  // The desk keeps no ledger — it is a separate service with a separate
+  // database, and anything it recorded would be invisible to the cost report.
+  // The buyer records the call, in the process that shares the ledger with
+  // everything else this agent does.
+  store.llmCallRecord(
+    req.agentName,
+    out.model ?? process.env.ANTHROPIC_MODEL ?? "claude-opus-5",
+    out.usage.inputTokens,
+    out.usage.outputTokens,
+    out.usage.cacheWrite,
+    out.usage.cacheRead,
+  );
+  store.llmFailureClear(req.agentName);
 
   // What was actually settled, from the seller's own echo, rather than the
   // price the buyer expected to pay.

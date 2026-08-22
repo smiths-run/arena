@@ -18,6 +18,12 @@
  * The desk holds the API key. Agents never see it, and no agent can spend more
  * on thinking than its own wallet holds.
  *
+ * It keeps no ledger. A desk is a separate service with a separate database,
+ * so anything it wrote would land where nobody reading the platform's cost
+ * report could see it. The buyer records the call, in the process that shares
+ * the ledger with everything else the agent does — and it is the buyer's
+ * spending, so it belongs on the buyer's record anyway.
+ *
  * A note on what testnet proves. The agent pays in testnet USDC and the desk
  * pays Anthropic in real money, so this loop is real in its mechanism and
  * circular in its economics: the 402, the authorization, the Circle signature,
@@ -31,7 +37,6 @@ import express from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { createGatewayMiddleware } from "@circle-fin/x402-batching/server";
 import { apiKey, classify, keyShape } from "./inference.ts";
-import * as store from "./store.ts";
 
 const PORT = Number(process.env.MIND_PORT ?? 42072);
 const PRICE = process.env.MIND_PRICE ?? "$0.01";
@@ -147,21 +152,6 @@ app.post("/think", answerable, gateway.require(PRICE), async (req, res) => {
 
     const message = res2 as Anthropic.Message;
 
-    // The buyer paid for this thought, so the buyer's ledger carries its cost.
-    // Recording it against the desk instead would put the platform's own
-    // spending on an agent's public record.
-    if (body.agent) {
-      store.llmCallRecord(
-        body.agent,
-        MODEL,
-        message.usage.input_tokens,
-        message.usage.output_tokens,
-        message.usage.cache_creation_input_tokens ?? 0,
-        message.usage.cache_read_input_tokens ?? 0,
-      );
-      store.llmFailureClear(body.agent);
-    }
-
     if (payment?.verified) {
       console.log(
         `sold a thought to ${payment.payer} for ${payment.amount} ` +
@@ -174,6 +164,8 @@ app.post("/think", answerable, gateway.require(PRICE), async (req, res) => {
     res.json({
       text: text?.text ?? "",
       stopReason: message.stop_reason,
+      // Named so the buyer prices what actually answered, not what it assumed.
+      model: MODEL,
       usage: {
         inputTokens: message.usage.input_tokens,
         outputTokens: message.usage.output_tokens,
@@ -185,7 +177,6 @@ app.post("/think", answerable, gateway.require(PRICE), async (req, res) => {
   } catch (err) {
     const { kind, detail } = classify(err);
     const owed = Boolean(payment?.verified);
-    if (body.agent) store.llmFailureRecord(body.agent, kind, detail);
     if (owed) {
       // Not merely an error: the buyer has already paid. Say so loudly enough
       // that it can be made good, rather than letting a bare 502 imply that

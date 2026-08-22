@@ -20,6 +20,7 @@ import { PROPOSAL_SCHEMA, buildPrompt, toAction, type Proposal } from "./proposa
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 import { apiKey, classify, keyShape } from "./inference.ts";
+import { shouldThink } from "./attention.ts";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5";
 /** Depth of reasoning per call; "low" keeps a 60s-cooldown loop affordable. */
@@ -36,11 +37,21 @@ export const llmStrategist: Strategist = async (input) => {
     store.llmFailureRecord(input.agentName, "no_key", "ANTHROPIC_API_KEY is not set");
     return heuristicStrategist(input);
   }
-  const calls = store.llmCallsLast24h(input.agentName);
-  if (calls >= input.strategy.llm.maxCallsPerDay) {
-    log(`llm daily cap reached (${calls}/${input.strategy.llm.maxCallsPerDay}), heuristic takes over`);
+  // A quota paced thinking before this, and a quota is not a schedule: the
+  // allowance went in the first two hours of the day and the agent was blind
+  // for the rest. Now the world decides when a thought is worth buying.
+  const attention = shouldThink({
+    agentName: input.agentName,
+    address: input.address,
+    strategy: input.strategy,
+    wakeReason: input.wakeReason,
+  });
+  if (!attention.think) {
+    log(`not thinking — ${attention.reason}; heuristic takes over`);
     return heuristicStrategist(input);
   }
+  const calls = store.llmCallsLast24h(input.agentName);
+  log(`thinking — ${attention.reason} (${calls + 1}/${input.strategy.llm.maxCallsPerDay} today)`);
 
   try {
     // Cleaned rather than read raw: a stray newline in the dashboard is

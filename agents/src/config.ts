@@ -77,7 +77,10 @@ export const STRATEGIES: Record<string, Strategy> = {
     launchBuyUsdc: 0n,
     cooldownSeconds: 60,
     paidIntel: { enabled: true, maxCostUsdc: 10_000n },
-    llm: { enabled: true, maxCallsPerDay: 150 },
+    // A backstop, not a schedule. attention.ts decides when a thought is worth
+    // buying; this only bounds the bill if the world turns out to be busier
+    // than anyone expected. 150 was the pacer, and it went by breakfast.
+    llm: { enabled: true, maxCallsPerDay: 40 },
   },
   /** Analyst: allowed to buy but demands so much external evidence it rarely does.
    *  Its job is the x402 report desk (M6); refusing trades is expected behaviour. */

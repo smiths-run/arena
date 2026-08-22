@@ -1323,6 +1323,23 @@ export function eventById(id: string): PlatformEventRow | null {
   return row ? toEvent(row) : null;
 }
 
+/**
+ * How much the world moved since a moment, ignoring one wallet's own doing.
+ *
+ * This is the question an agent asks before deciding whether it is worth
+ * thinking: has anything happened that my last look did not already account
+ * for? Its own trades do not count — an agent that woke itself up every time it
+ * acted would never stop.
+ */
+export function eventsCountSince(sinceMs: number, exceptWallet?: string): number {
+  const row = exceptWallet
+    ? (db
+        .prepare("SELECT COUNT(*) n FROM platform_events WHERE at > ? AND actor_wallet != ?")
+        .get(sinceMs, exceptWallet.toLowerCase()) as { n: number })
+    : (db.prepare("SELECT COUNT(*) n FROM platform_events WHERE at > ?").get(sinceMs) as { n: number });
+  return row.n;
+}
+
 export function eventsCountByActor(wallet: string): number {
   const row = db
     .prepare("SELECT COUNT(*) n FROM platform_events WHERE actor_wallet = ?")
@@ -1853,6 +1870,14 @@ export function llmFailures(): LlmFailure[] {
     agent: r.agent, kind: r.kind, detail: r.detail,
     count: r.count, firstAt: r.first_at, lastAt: r.last_at,
   }));
+}
+
+/** When this agent last thought successfully, or null if it never has. */
+export function llmLastCallAtFor(agent: string): number | null {
+  const row = db
+    .prepare("SELECT MAX(at) at FROM llm_calls WHERE agent = ?")
+    .get(agent) as { at: number | null };
+  return row.at ?? null;
 }
 
 /** When any agent last thought successfully, or null if none ever has. */

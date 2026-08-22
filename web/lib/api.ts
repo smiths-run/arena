@@ -260,7 +260,11 @@ export const api = {
   runs: (limit = 60) => get<{ runs: Run[] }>(`${RECEIPTS}/runs?limit=${limit}`),
   intel: () => get<IntelLedger>(`${RECEIPTS}/intel`),
   netResult: () =>
-    get<{ agents: Array<{ agent: string; runs: number; net: string }> }>(`${RECEIPTS}/net-result`),
+    get<{
+      agents: Array<{ agent: string; runs: number; net: string }>;
+      /** Set once agents pay for their own thinking; null while the platform does. */
+      thoughtCostUsdc: string | null;
+    }>(`${RECEIPTS}/net-result`),
 };
 
 // ── formatting ──────────────────────────────────────────────────────────────

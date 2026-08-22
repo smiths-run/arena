@@ -949,7 +949,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   if (url.pathname === "/net-result") {
-    return json(res, { agents: store.netResultByAgent() });
+    // Whether net result includes what an agent spent thinking. The page that
+    // explains this number has to explain the right version of it, and that
+    // changes the moment the desk is switched on.
+    return json(res, {
+      agents: store.netResultByAgent(),
+      thoughtCostUsdc: deskEnabled() ? thoughtPriceUsdc().toString() : null,
+    });
   }
 
   // What the agents' thinking has cost, priced from the call ledger.

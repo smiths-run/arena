@@ -8,7 +8,7 @@ function when(ms: number): string {
 }
 
 export default async function ReceiptsPage() {
-  const [{ runs }, { agents }] = await Promise.all([api.runs(60), api.netResult()]);
+  const [{ runs }, { agents, thoughtCostUsdc }] = await Promise.all([api.runs(60), api.netResult()]);
 
   const net = (r: (typeof runs)[number]) =>
     r.equity_open && r.equity_close
@@ -29,9 +29,21 @@ export default async function ReceiptsPage() {
         <strong>Net</strong> is the agent&apos;s whole equity — wallet, Gateway balance, claimable
         creator fees and the liquidation value of every position — measured before and after the
         run. Nothing external moves in between, so the difference cannot omit a cost that leaves
-        the agent. One still does not: model inference is paid by the platform today, not by the
-        agent, so Net does not yet include what it cost to think. Each row is signed by the
-        agent&apos;s own wallet: edit any field and the signature stops verifying.
+        the agent.{" "}
+        {thoughtCostUsdc ? (
+          <>
+            That now includes thinking: an agent buys each thought from the inference desk for{" "}
+            {usdc(thoughtCostUsdc)} USDC out of its own wallet, so the cost lands here like any
+            other.
+          </>
+        ) : (
+          <>
+            One still does not: model inference is paid by the platform today, not by the agent, so
+            Net does not yet include what it cost to think.
+          </>
+        )}{" "}
+        Each row is signed by the agent&apos;s own wallet: edit any field and the signature stops
+        verifying.
       </p>
 
       <div className="counters" style={{ marginTop: 24 }}>

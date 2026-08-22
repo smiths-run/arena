@@ -36,7 +36,7 @@ import "dotenv/config";
 import express from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { createGatewayMiddleware } from "@circle-fin/x402-batching/server";
-import { apiKey, classify, keyShape } from "./inference.ts";
+import { apiKey, classify, keyShape, meaningOf, type FailureKind } from "./inference.ts";
 
 const PORT = Number(process.env.MIND_PORT ?? 42072);
 const PRICE = process.env.MIND_PRICE ?? "$0.01";
@@ -98,6 +98,24 @@ app.get("/", (_req, res) => {
  * looked fine — and that case is logged as a debt below rather than vanishing
  * into a 502.
  */
+/**
+ * A desk that has just failed must stop taking money.
+ *
+ * The paywall settles before the handler runs, so every request that arrives
+ * while the desk is broken is a payment taken for nothing. Without this, an
+ * Anthropic account running out of credit does not cost one thought — it costs
+ * one per run, from every agent, until somebody notices. It cost about a
+ * hundred before anybody did.
+ *
+ * So the last failure latches, and while it holds, requests are refused in
+ * front of the paywall. After the cooldown exactly one request is let through
+ * to find out whether the world has healed; if it has, the latch clears on the
+ * success below. The worst case becomes one wasted payment a minute instead of
+ * one a run, and the desk repairs itself without anybody redeploying it.
+ */
+const BREAKER_COOLDOWN_MS = 60_000;
+let breaker: { kind: FailureKind; detail: string; at: number } | null = null;
+
 const answerable: express.RequestHandler = (req, res, next) => {
   const body = req.body as { system?: unknown; user?: unknown } | undefined;
   if (typeof body?.user !== "string" || body.user.trim() === "") {
@@ -113,6 +131,14 @@ const answerable: express.RequestHandler = (req, res, next) => {
   if (shape.credential === "oauth") {
     console.log("refused before charging: the desk holds an OAuth token, not an API key");
     res.status(503).json({ error: "the desk is not configured to think right now", charged: false });
+    return;
+  }
+  if (breaker && Date.now() - breaker.at < BREAKER_COOLDOWN_MS) {
+    res.status(503).json({
+      error: `the desk cannot think right now: ${meaningOf(breaker.kind)}`,
+      kind: breaker.kind,
+      charged: false,
+    });
     return;
   }
   next();
@@ -151,6 +177,10 @@ app.post("/think", answerable, gateway.require(PRICE), async (req, res) => {
     } as Parameters<Anthropic["messages"]["create"]>[0]);
 
     const message = res2 as Anthropic.Message;
+    if (breaker) {
+      console.log(`desk recovered from ${breaker.kind}; taking payments again`);
+      breaker = null;
+    }
 
     if (payment?.verified) {
       console.log(
@@ -177,6 +207,10 @@ app.post("/think", answerable, gateway.require(PRICE), async (req, res) => {
   } catch (err) {
     const { kind, detail } = classify(err);
     const owed = Boolean(payment?.verified);
+    // Latch before answering, so the next request is refused rather than
+    // charged. This is the whole point: the money has already moved for this
+    // one and nothing can undo that, but it must not happen again on the next.
+    breaker = { kind, detail, at: Date.now() };
     if (owed) {
       // Not merely an error: the buyer has already paid. Say so loudly enough
       // that it can be made good, rather than letting a bare 502 imply that

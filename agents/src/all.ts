@@ -3,14 +3,26 @@
  *
  *   npm run all
  *
- * The receipts API, the analyst desk and the orchestrator share one sqlite
- * ledger, so they must share one filesystem — one container, three children.
- * If any child dies the whole process exits non-zero and the platform
- * restarts the container; startup reconciliation makes that safe.
+ * The receipts API, the two desks and the orchestrator share one sqlite ledger,
+ * so they must share one filesystem — one container, four children. If any
+ * child dies the whole process exits non-zero and the platform restarts the
+ * container; startup reconciliation makes that safe.
+ *
+ * The mind desk only joins when it has been given an address to be paid at.
+ * Starting it without one would take the whole container down on boot, and a
+ * missing optional feature is not a reason for the economy to stop.
  */
 import { spawn } from "node:child_process";
 
-const CHILDREN = ["src/serve.ts", "src/analyst.ts", "src/orchestrator.ts"];
+const CHILDREN = [
+  "src/serve.ts",
+  "src/analyst.ts",
+  ...(process.env.MIND_DESK_ADDRESS ? ["src/mind.ts"] : []),
+  "src/orchestrator.ts",
+];
+if (!process.env.MIND_DESK_ADDRESS) {
+  console.log("mind desk not started: MIND_DESK_ADDRESS is not set");
+}
 
 let shuttingDown = false;
 const procs = CHILDREN.map((script) => {

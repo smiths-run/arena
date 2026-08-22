@@ -56,18 +56,18 @@ function event(wallet: string, atMs: number) {
     {
       id: `0xtx${seq}:${seq}`,
       type: "buy",
-      blockNumber: String(1000 + seq),
+      blockNumber: BigInt(1000 + seq),
       logIndex: seq,
       txHash: `0xtx${seq}`,
       at: atMs,
       actorWallet: wallet,
-      marketId: "1",
-      usdc: "500000",
-      tokens: "1000",
+      marketId: 1n,
+      usdc: 500_000n,
+      tokens: 1_000n,
       symbol: "TEST",
       name: "Test",
     },
-  ] as Parameters<typeof store.eventsAppend>[0]);
+  ]);
 }
 
 test("an agent that has never thought takes a first look", () => {

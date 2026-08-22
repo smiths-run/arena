@@ -21,6 +21,7 @@ import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 import { apiKey, classify, keyShape } from "./inference.ts";
 import { shouldThink } from "./attention.ts";
+import { buyThought, deskEnabled } from "./thinking.ts";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5";
 /** Depth of reasoning per call; "low" keeps a 60s-cooldown loop affordable. */
@@ -77,42 +78,70 @@ export const llmStrategist: Strategist = async (input) => {
       claimable,
     });
 
-    const res = await client.messages.create({
-      model: MODEL,
-      max_tokens: 4096,
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content: user }],
-      output_config: {
-        // Haiku-tier models reject the effort parameter; everything else gets it.
-        ...(MODEL.includes("haiku") ? {} : { effort: EFFORT }),
-        format: { type: "json_schema", schema: PROPOSAL_SCHEMA },
-      },
-    });
+    // Two ways to buy the same thought. With a desk configured the agent pays
+    // for it out of its own Gateway balance, which equity already measures, so
+    // the cost lands in this run's net result with no new accounting. Without
+    // one, the platform's key pays and the cost stays outside the ledger — the
+    // gap inference.ts reports and this exists to close.
+    let answer: string;
+    let stopReason: string | null;
 
-    // input_tokens excludes anything the cache served, and cached tokens are
-    // billed at their own rates — recording only the first number is how a cost
-    // report understates exactly the calls the cache was added to make cheap.
-    store.llmCallRecord(
-      input.agentName,
-      MODEL,
-      res.usage.input_tokens,
-      res.usage.output_tokens,
-      res.usage.cache_creation_input_tokens ?? 0,
-      res.usage.cache_read_input_tokens ?? 0,
-    );
-    store.llmFailureClear(input.agentName);
-    log(
-      `llm ${MODEL} call ${calls + 1}/${input.strategy.llm.maxCallsPerDay} — ` +
-        `${res.usage.input_tokens} in / ${res.usage.output_tokens} out`,
-    );
+    if (deskEnabled()) {
+      const bought = await buyThought({
+        agentName: input.agentName,
+        system,
+        user,
+        schema: PROPOSAL_SCHEMA,
+        effort: MODEL.includes("haiku") ? undefined : EFFORT,
+      });
+      answer = bought.text;
+      stopReason = bought.stopReason;
+      log(
+        `bought a thought for ${Number(bought.costUsdc) / 1e6} USDC ` +
+          `(settlement ${bought.settlementRef ?? "unknown"}) — ` +
+          `${calls + 1}/${input.strategy.llm.maxCallsPerDay} today`,
+      );
+    } else {
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 4096,
+        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+        messages: [{ role: "user", content: user }],
+        output_config: {
+          // Haiku-tier models reject the effort parameter; everything else gets it.
+          ...(MODEL.includes("haiku") ? {} : { effort: EFFORT }),
+          format: { type: "json_schema", schema: PROPOSAL_SCHEMA },
+        },
+      });
 
-    if (res.stop_reason !== "end_turn") {
-      throw new Error(`llm stopped with ${res.stop_reason}`);
+      // input_tokens excludes anything the cache served, and cached tokens are
+      // billed at their own rates — recording only the first number is how a
+      // cost report understates exactly the calls the cache made cheap.
+      store.llmCallRecord(
+        input.agentName,
+        MODEL,
+        res.usage.input_tokens,
+        res.usage.output_tokens,
+        res.usage.cache_creation_input_tokens ?? 0,
+        res.usage.cache_read_input_tokens ?? 0,
+      );
+      store.llmFailureClear(input.agentName);
+      log(
+        `llm ${MODEL} call ${calls + 1}/${input.strategy.llm.maxCallsPerDay} — ` +
+          `${res.usage.input_tokens} in / ${res.usage.output_tokens} out`,
+      );
+
+      const block = res.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+      if (!block) throw new Error("llm returned no text block");
+      answer = block.text;
+      stopReason = res.stop_reason;
     }
-    const text = res.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-    if (!text) throw new Error("llm returned no text block");
 
-    const proposal = JSON.parse(text.text) as Proposal;
+    if (stopReason !== "end_turn") {
+      throw new Error(`llm stopped with ${stopReason}`);
+    }
+
+    const proposal = JSON.parse(answer) as Proposal;
     return toAction(proposal, {
       validMarketIds: new Set(input.markets.map((m) => m.id)),
       positions,

@@ -141,6 +141,23 @@ curl -s $RECEIPTS_URL/inference | jq          # what thinking has cost, and net 
 
 Closing the gap means the agent buying its thinking from an inference desk in USDC over x402, exactly as it already buys a report from `bellows`. At that point the derivation above covers inference with no new bookkeeping, because the money leaves the same two balances equity already measures.
 
+That desk is built and switched off. `npm run mind` serves one paid endpoint —
+a request without payment gets 402 and a price, a request carrying a valid x402
+authorization gets a completion — and the agent pays out of its own Gateway
+balance under a mandate its wallet enforces. It refuses before charging when it
+cannot answer, because a paywall that settles first turns every failure into a
+debt.
+
+Nothing routes through it until `INFERENCE_DESK_URL` is set, and it will not
+start without `MIND_DESK_ADDRESS`: the payee has to be a treasury identity
+rather than a trading agent, or the platform's inference revenue lands on some
+agent's public record and is read as trading performance.
+
+```bash
+MIND_DESK_ADDRESS=0x… npm run mind      # the desk
+INFERENCE_DESK_URL=http://localhost:42072  # what points agents at it
+```
+
 ### Signed receipts
 
 Trades settle onchain and anyone can check them. Refusals do not — and refusing is the behaviour this product is proudest of. So every run ends with a canonical receipt signed by the agent's own wallet through Circle. That does not put the refusal onchain and is not claimed to; it makes the record attributable and tamper-evident.

@@ -166,21 +166,6 @@ export async function buyThought(req: ThoughtRequest): Promise<Thought> {
     usage: { inputTokens: number; outputTokens: number; cacheWrite: number; cacheRead: number };
   };
 
-  // The desk keeps no ledger — it is a separate service with a separate
-  // database, and anything it recorded would be invisible to the cost report.
-  // The buyer records the call, in the process that shares the ledger with
-  // everything else this agent does.
-  store.llmCallRecord(
-    req.agentName,
-    out.model ?? process.env.ANTHROPIC_MODEL ?? "claude-opus-5",
-    out.usage.inputTokens,
-    out.usage.outputTokens,
-    out.usage.cacheWrite,
-    out.usage.cacheRead,
-    "desk",
-  );
-  store.llmFailureClear(req.agentName);
-
   // What was actually settled, from the seller's own echo, rather than the
   // price the buyer expected to pay.
   let settlementRef: string | null = null;
@@ -203,6 +188,23 @@ export async function buyThought(req: ThoughtRequest): Promise<Thought> {
       settlementRef = header.slice(0, 64);
     }
   }
+
+  // Recorded after the settlement is known, so the row carries what the agent
+  // actually paid and the reference that proves it. The desk keeps no ledger of
+  // its own — it is a separate service with a separate database — and it is the
+  // buyer's spending, so it belongs on the buyer's record anyway.
+  store.llmCallRecord(
+    req.agentName,
+    out.model ?? process.env.ANTHROPIC_MODEL ?? "claude-opus-5",
+    out.usage.inputTokens,
+    out.usage.outputTokens,
+    out.usage.cacheWrite,
+    out.usage.cacheRead,
+    "desk",
+    costUsdc,
+    settlementRef,
+  );
+  store.llmFailureClear(req.agentName);
 
   store.spendRecord(req.agentName, costUsdc);
   return { text: out.text, stopReason: out.stopReason, costUsdc, settlementRef };

@@ -8,6 +8,7 @@ const TABS = [
   { href: "/chat", label: "Chat" },
   { href: "/", label: "Markets" },
   { href: "/receipts", label: "Receipts" },
+  { href: "/usage", label: "Usage" },
 ];
 
 export function Tabs() {

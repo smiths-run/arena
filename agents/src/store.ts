@@ -261,6 +261,11 @@ db.exec(`
     -- only be answered by watching a wallet and inferring, which is how a whole
     -- evening went to guessing.
     via TEXT NOT NULL DEFAULT 'direct',
+    -- What the agent was actually charged, and the settlement that proves it.
+    -- The operator's bill has to be checkable against the chain rather than
+    -- taken on trust, which is the one thing a hosted usage page cannot offer.
+    charged_usdc TEXT NOT NULL DEFAULT '0',
+    settlement_ref TEXT,
     at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS llm_calls_agent ON llm_calls(agent, at);
@@ -298,6 +303,8 @@ db.exec(`
   if (!cols.has("cache_write")) addColumn("llm_calls", "cache_write", "INTEGER NOT NULL DEFAULT 0");
   if (!cols.has("cache_read")) addColumn("llm_calls", "cache_read", "INTEGER NOT NULL DEFAULT 0");
   if (!cols.has("via")) addColumn("llm_calls", "via", "TEXT NOT NULL DEFAULT 'direct'");
+  if (!cols.has("charged_usdc")) addColumn("llm_calls", "charged_usdc", "TEXT NOT NULL DEFAULT '0'");
+  if (!cols.has("settlement_ref")) addColumn("llm_calls", "settlement_ref", "TEXT");
 }
 
 // ── runs ────────────────────────────────────────────────────────────────────
@@ -1788,11 +1795,18 @@ export function llmCallRecord(
   cacheWrite = 0,
   cacheRead = 0,
   via: "direct" | "desk" | "chat" = "direct",
+  chargedUsdc: bigint = 0n,
+  settlementRef: string | null = null,
 ): void {
   db.prepare(
-    `INSERT INTO llm_calls (agent, model, tokens_in, tokens_out, cache_write, cache_read, via, at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(agent, model, tokensIn, tokensOut, cacheWrite, cacheRead, via, Date.now());
+    `INSERT INTO llm_calls
+       (agent, model, tokens_in, tokens_out, cache_write, cache_read, via,
+        charged_usdc, settlement_ref, at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    agent, model, tokensIn, tokensOut, cacheWrite, cacheRead, via,
+    chargedUsdc.toString(), settlementRef, Date.now(),
+  );
 }
 
 /**
@@ -1879,6 +1893,76 @@ export function llmFailures(): LlmFailure[] {
   return rows.map((r) => ({
     agent: r.agent, kind: r.kind, detail: r.detail,
     count: r.count, firstAt: r.first_at, lastAt: r.last_at,
+  }));
+}
+
+export interface ThoughtRow {
+  agent: string;
+  model: string;
+  via: string;
+  tokensIn: number;
+  tokensOut: number;
+  chargedUsdc: string;
+  settlementRef: string | null;
+  at: number;
+}
+
+/**
+ * One operator's thoughts, newest first.
+ *
+ * Scoped by agent name rather than filtered afterwards: a bill is the one place
+ * where showing a row that belongs to somebody else is unforgivable, and the
+ * safest way not to is never to load it.
+ */
+export function llmThoughtsFor(agents: string[], limit = 200, sinceMs = 0): ThoughtRow[] {
+  if (agents.length === 0) return [];
+  const holes = agents.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT agent, model, via, tokens_in, tokens_out, charged_usdc, settlement_ref, at
+       FROM llm_calls
+       WHERE agent IN (${holes}) AND at >= ?
+       ORDER BY at DESC LIMIT ?`,
+    )
+    .all(...agents, sinceMs, limit) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    agent: String(r.agent),
+    model: String(r.model),
+    via: String(r.via ?? "direct"),
+    tokensIn: Number(r.tokens_in ?? 0),
+    tokensOut: Number(r.tokens_out ?? 0),
+    chargedUsdc: String(r.charged_usdc ?? "0"),
+    settlementRef: r.settlement_ref === null || r.settlement_ref === undefined ? null : String(r.settlement_ref),
+    at: Number(r.at),
+  }));
+}
+
+/** The same thoughts, counted and totalled by agent and by day. */
+export function llmBillFor(
+  agents: string[],
+  sinceMs = 0,
+): Array<{ agent: string; day: string; thoughts: number; paid: number; chargedUsdc: string }> {
+  if (agents.length === 0) return [];
+  const holes = agents.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT agent,
+              date(at / 1000, 'unixepoch') day,
+              COUNT(*) thoughts,
+              SUM(CASE WHEN CAST(charged_usdc AS INTEGER) > 0 THEN 1 ELSE 0 END) paid,
+              SUM(CAST(charged_usdc AS INTEGER)) charged
+       FROM llm_calls
+       WHERE agent IN (${holes}) AND at >= ?
+       GROUP BY agent, day
+       ORDER BY day DESC, agent ASC`,
+    )
+    .all(...agents, sinceMs) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    agent: String(r.agent),
+    day: String(r.day),
+    thoughts: Number(r.thoughts ?? 0),
+    paid: Number(r.paid ?? 0),
+    chargedUsdc: String(r.charged ?? 0),
   }));
 }
 

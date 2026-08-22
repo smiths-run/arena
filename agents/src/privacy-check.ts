@@ -73,6 +73,10 @@ const get = async (path: string, headers: Record<string, string> = {}) => {
   return { status: r.status, body: (await r.json()) as any };
 };
 
+// A paid thought for each, so a bill that leaked would have something to leak.
+store.llmCallRecord("bobo", "claude-opus-5", 500, 120, 0, 0, "desk", 10_000n, "0xSETTLEMENTBOBO");
+store.llmCallRecord("evilagent", "claude-opus-5", 500, 120, 0, 0, "desk", 10_000n, "0xSETTLEMENTEVIL");
+
 let bad = 0;
 const check = (label: string, ok: boolean, note = "") => {
   if (!ok) bad++;
@@ -84,7 +88,7 @@ const roster = await get("/agents");
 const target = roster.body.agents.find((a: any) => a.name === "bobo");
 check("the directory does publish the handle and its owner", Boolean(target?.owner), target?.owner);
 
-const PRIVATE = ["/chat/history?handle=bobo", "/rules?handle=bobo", "/triggers?handle=bobo"];
+const PRIVATE = ["/chat/history?handle=bobo", "/rules?handle=bobo", "/triggers?handle=bobo", "/inference/mine?days=30"];
 
 for (const path of PRIVATE) {
   const open = await get(path);
@@ -99,9 +103,23 @@ for (const path of PRIVATE) {
 
 // A real grant, but the attacker's own.
 const theirs = await grantFor(attacker);
-for (const path of PRIVATE) {
+for (const path of PRIVATE.filter((p) => p.includes("handle="))) {
   const wrong = await get(path, theirs);
   check(`${path.split("?")[0]} refuses another operator's valid grant`, wrong.status === 404 || wrong.status === 403, wrong.body.error);
+}
+
+// A bill is scoped rather than refused: the attacker's own grant is valid, and
+// the right answer is their own empty bill — never a row belonging to somebody
+// else. This is the failure that would matter most, so it is asserted on the
+// body rather than on the status code.
+{
+  const wrong = await get("/inference/mine?days=30", theirs);
+  const names = JSON.stringify(wrong.body.byAgent ?? []) + JSON.stringify(wrong.body.thoughts ?? []);
+  check(
+    "/inference/mine shows another operator none of the victim's agents",
+    wrong.status === 200 && !names.includes("bobo"),
+    names.slice(0, 80),
+  );
 }
 
 // A forged signature, and an expired one.
@@ -119,6 +137,12 @@ const rules = await get(PRIVATE[1], mine);
 check("and their own rules", rules.status === 200 && rules.body.rules.length === 1, rules.body.rules?.[0]?.text);
 const trg = await get(PRIVATE[2], mine);
 check("and who their agent follows", trg.status === 200 && trg.body.triggers.length === 1);
+const bill = await get("/inference/mine?days=30", mine);
+check(
+  "and their own bill for thinking",
+  bill.status === 200 && bill.body.byAgent.some((a: any) => a.handle === "bobo"),
+  JSON.stringify(bill.body.total ?? {}),
+);
 
 // Nothing secret leaked into the public surfaces along the way.
 const publicText = JSON.stringify(roster.body) + JSON.stringify((await get("/runs?limit=50")).body) +

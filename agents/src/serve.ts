@@ -958,6 +958,67 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
+  // One operator's own bill for thinking. Private, and proved rather than
+  // asserted: the roster publishes every agent's owner, so an owner address in
+  // a query string would be an invitation rather than a credential.
+  //
+  // It reports what the operator was charged, never what the platform paid —
+  // the desk's margin is the desk's business, and a bill that quietly showed it
+  // would invite exactly the wrong argument.
+  if (req.method === "GET" && url.pathname === "/inference/mine") {
+    const auth = await verifyGrantHeader(req);
+    if ("error" in auth) return json(res, { error: auth.error }, 403);
+
+    const mine = store.userAgentsListByOwner(auth.owner);
+    const names = mine.map((r) => r.name);
+    const raw = Number(url.searchParams.get("days") ?? "30");
+    const days = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 365) : 30;
+    const since = Date.now() - days * 86_400_000;
+
+    const bill = store.llmBillFor(names, since);
+    const thoughts = store.llmThoughtsFor(names, 200, since);
+
+    const perAgent = new Map<string, { thoughts: number; paid: number; charged: bigint }>();
+    for (const b of bill) {
+      const a = perAgent.get(b.agent) ?? { thoughts: 0, paid: 0, charged: 0n };
+      a.thoughts += b.thoughts;
+      a.paid += b.paid;
+      a.charged += BigInt(b.chargedUsdc);
+      perAgent.set(b.agent, a);
+    }
+
+    const byDay = new Map<string, { thoughts: number; charged: bigint }>();
+    for (const b of bill) {
+      const d = byDay.get(b.day) ?? { thoughts: 0, charged: 0n };
+      d.thoughts += b.thoughts;
+      d.charged += BigInt(b.chargedUsdc);
+      byDay.set(b.day, d);
+    }
+
+    const total = [...perAgent.values()].reduce(
+      (t, a) => ({ thoughts: t.thoughts + a.thoughts, paid: t.paid + a.paid, charged: t.charged + a.charged }),
+      { thoughts: 0, paid: 0, charged: 0n },
+    );
+
+    return json(res, {
+      days,
+      priceUsdc: deskEnabled() ? thoughtPriceUsdc().toString() : null,
+      total: { ...total, chargedUsdc: total.charged.toString(), charged: undefined },
+      byAgent: [...perAgent.entries()]
+        .map(([handle, a]) => ({
+          handle,
+          thoughts: a.thoughts,
+          paid: a.paid,
+          chargedUsdc: a.charged.toString(),
+        }))
+        .sort((a, b) => Number(BigInt(b.chargedUsdc) - BigInt(a.chargedUsdc)) || b.thoughts - a.thoughts),
+      byDay: [...byDay.entries()]
+        .map(([day, d]) => ({ day, thoughts: d.thoughts, chargedUsdc: d.charged.toString() }))
+        .sort((a, b) => (a.day < b.day ? 1 : -1)),
+      thoughts,
+    });
+  }
+
   // What the agents' thinking has cost, priced from the call ledger.
   //
   // This is the one cost the receipts do not yet carry, so it gets its own

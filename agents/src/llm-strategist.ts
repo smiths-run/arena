@@ -124,6 +124,7 @@ export const llmStrategist: Strategist = async (input) => {
         res.usage.output_tokens,
         res.usage.cache_creation_input_tokens ?? 0,
         res.usage.cache_read_input_tokens ?? 0,
+        "direct",
       );
       store.llmFailureClear(input.agentName);
       log(

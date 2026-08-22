@@ -738,6 +738,7 @@ export async function handleChatMessage(
         response.usage.output_tokens,
         response.usage.cache_creation_input_tokens ?? 0,
         response.usage.cache_read_input_tokens ?? 0,
+        "chat",
       );
       store.llmFailureClear(entry.name);
 

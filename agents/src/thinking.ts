@@ -177,6 +177,7 @@ export async function buyThought(req: ThoughtRequest): Promise<Thought> {
     out.usage.outputTokens,
     out.usage.cacheWrite,
     out.usage.cacheRead,
+    "desk",
   );
   store.llmFailureClear(req.agentName);
 

@@ -109,6 +109,13 @@ export interface AgentUsage {
 
 export interface UsageReport {
   sinceMs: number;
+  /**
+   * How the thoughts were obtained, and what each route cost.
+   *
+   * "Is the agent actually paying for its thinking?" should be answerable by
+   * reading one number, not by watching a wallet and inferring.
+   */
+  byRoute: Array<{ via: string; calls: number; costUsdc: string }>;
   /** null when the window is "everything ever", where an hour count is noise. */
   windowHours: number | null;
   calls: number;
@@ -137,6 +144,7 @@ export function usage(sinceMs: number, nowMs = Date.now()): UsageReport {
   const nets = new Map(store.netResultByAgent().map((n) => [n.agent, BigInt(n.net)]));
 
   const models = new Map<string, ModelUsage>();
+  const routes = new Map<string, { calls: number; cost: bigint }>();
   const agents = new Map<string, { calls: number; tokensIn: number; tokensOut: number; cost: bigint }>();
   let calls = 0;
   let tokensIn = 0;
@@ -162,6 +170,11 @@ export function usage(sinceMs: number, nowMs = Date.now()): UsageReport {
     m.costUsdc = (BigInt(m.costUsdc) + c).toString();
     models.set(r.model, m);
 
+    const rt = routes.get(r.via) ?? { calls: 0, cost: 0n };
+    rt.calls += r.calls;
+    rt.cost += c;
+    routes.set(r.via, rt);
+
     const a = agents.get(r.agent) ?? { calls: 0, tokensIn: 0, tokensOut: 0, cost: 0n };
     a.calls += r.calls;
     a.tokensIn += r.tokensIn;
@@ -173,6 +186,9 @@ export function usage(sinceMs: number, nowMs = Date.now()): UsageReport {
   return {
     sinceMs,
     windowHours: sinceMs === 0 ? null : Math.round(((nowMs - sinceMs) / 3_600_000) * 10) / 10,
+    byRoute: [...routes.entries()]
+      .map(([via, r]) => ({ via, calls: r.calls, costUsdc: r.cost.toString() }))
+      .sort((a, b) => b.calls - a.calls),
     calls,
     tokensIn,
     tokensOut,

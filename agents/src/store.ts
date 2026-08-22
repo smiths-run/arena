@@ -256,6 +256,11 @@ db.exec(`
     -- cache was added to make cheap.
     cache_write INTEGER NOT NULL DEFAULT 0,
     cache_read INTEGER NOT NULL DEFAULT 0,
+    -- How the thought was obtained: bought from the desk, or taken free on the
+    -- platform's key. Without this, "is the agent paying for its thinking?" can
+    -- only be answered by watching a wallet and inferring, which is how a whole
+    -- evening went to guessing.
+    via TEXT NOT NULL DEFAULT 'direct',
     at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS llm_calls_agent ON llm_calls(agent, at);
@@ -292,6 +297,7 @@ db.exec(`
   );
   if (!cols.has("cache_write")) addColumn("llm_calls", "cache_write", "INTEGER NOT NULL DEFAULT 0");
   if (!cols.has("cache_read")) addColumn("llm_calls", "cache_read", "INTEGER NOT NULL DEFAULT 0");
+  if (!cols.has("via")) addColumn("llm_calls", "via", "TEXT NOT NULL DEFAULT 'direct'");
 }
 
 // ── runs ────────────────────────────────────────────────────────────────────
@@ -1781,11 +1787,12 @@ export function llmCallRecord(
   tokensOut: number,
   cacheWrite = 0,
   cacheRead = 0,
+  via: "direct" | "desk" | "chat" = "direct",
 ): void {
   db.prepare(
-    `INSERT INTO llm_calls (agent, model, tokens_in, tokens_out, cache_write, cache_read, at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(agent, model, tokensIn, tokensOut, cacheWrite, cacheRead, Date.now());
+    `INSERT INTO llm_calls (agent, model, tokens_in, tokens_out, cache_write, cache_read, via, at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(agent, model, tokensIn, tokensOut, cacheWrite, cacheRead, via, Date.now());
 }
 
 /**
@@ -1804,15 +1811,16 @@ export function llmUsage(sinceMs: number): Array<{
   tokensOut: number;
   cacheWrite: number;
   cacheRead: number;
+  via: string;
 }> {
   const rows = db
     .prepare(
       `SELECT agent, model, COUNT(*) calls,
               SUM(tokens_in) tokens_in, SUM(tokens_out) tokens_out,
-              SUM(cache_write) cache_write, SUM(cache_read) cache_read
+              SUM(cache_write) cache_write, SUM(cache_read) cache_read, via
        FROM llm_calls
        WHERE at > ?
-       GROUP BY agent, model`,
+       GROUP BY agent, model, via`,
     )
     .all(sinceMs) as Array<{
     agent: string;
@@ -1822,6 +1830,7 @@ export function llmUsage(sinceMs: number): Array<{
     tokens_out: number | null;
     cache_write: number | null;
     cache_read: number | null;
+    via: string | null;
   }>;
   return rows.map((r) => ({
     agent: r.agent,
@@ -1831,6 +1840,7 @@ export function llmUsage(sinceMs: number): Array<{
     tokensOut: r.tokens_out ?? 0,
     cacheWrite: r.cache_write ?? 0,
     cacheRead: r.cache_read ?? 0,
+    via: r.via ?? "direct",
   }));
 }
 

@@ -9,7 +9,7 @@
  */
 import { circle } from "./shared.ts";
 import { resolve } from "./roster.ts";
-import { evaluate, type Observation } from "./policy.ts";
+import { evaluate, type Observation, GAS_HEADROOM_USDC } from "./policy.ts";
 import { heuristicStrategist, type Strategist } from "./strategist.ts";
 import * as obs from "./observe.ts";
 import * as store from "./store.ts";
@@ -154,16 +154,20 @@ export async function runOnce(
     let intelVerdict: string | undefined;
     if (action.kind === "buy" && strategy.paidIntel.enabled) {
       try {
-        await intel.ensureGatewayFunds(client, agent, (purpose, call, idem) =>
-          executor.submit(
-            client,
-            agent,
-            purpose,
-            call.contractAddress,
-            call.abiFunctionSignature,
-            call.abiParameters,
-            idem,
-          ),
+        await intel.ensureGatewayFunds(
+          client,
+          agent,
+          (purpose, call, idem) =>
+            executor.submit(
+              client,
+              agent,
+              purpose,
+              call.contractAddress,
+              call.abiFunctionSignature,
+              call.abiParameters,
+              idem,
+            ),
+          strategy.operatingReserveUsdc + GAS_HEADROOM_USDC,
         );
 
         const bought = await intel.buyReport(

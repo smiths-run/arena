@@ -253,3 +253,22 @@ test("usage carries the cache columns through to the report", () => {
   // Priced above what the old, cache-blind arithmetic would have produced.
   assert.ok(BigInt(agent.costUsdc) > inf.costOf("claude-opus-5", 500, 120));
 });
+
+test("an agent that cannot pay is told apart from a platform that cannot pay", () => {
+  // Two different people need to act: one funds an agent, the other pays a bill.
+  const poor = inf.classify(new Error("cannot afford to top up Gateway: 0.1 USDC in the wallet"));
+  assert.equal(poor.kind, "unaffordable");
+  assert.match(inf.meaningOf("unaffordable"), /afford/i);
+
+  const platform = inf.classify({ status: 400, message: "Your credit balance is too low" });
+  assert.equal(platform.kind, "credit");
+  assert.notEqual(poor.kind, platform.kind);
+});
+
+test("a desk that refuses is the agent's problem, not the model's", () => {
+  assert.equal(inf.classify(new Error("mind desk returned 503: not configured")).kind, "unaffordable");
+  assert.equal(
+    inf.classify(new Error("MIND_DESK_ADDRESS is not set; the agent has nobody it is allowed to pay")).kind,
+    "unaffordable",
+  );
+});

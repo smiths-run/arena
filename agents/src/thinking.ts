@@ -23,6 +23,7 @@ import { x402Client, wrapFetchWithPayment } from "@x402/fetch";
 import { registerBatchScheme } from "@circle-fin/x402-batching/client";
 import { circleSigner } from "./circle-signer.ts";
 import { ensureGatewayFunds } from "./intel.ts";
+import { GAS_HEADROOM_USDC } from "./policy.ts";
 import { circle } from "./shared.ts";
 import { resolve } from "./roster.ts";
 import * as executor from "./executor.ts";
@@ -111,16 +112,23 @@ export async function buyThought(req: ThoughtRequest): Promise<Thought> {
   // Thinking is frequent, so the top-up is the thing that must not happen
   // often: one deposit covers many thoughts, and each deposit is two onchain
   // transactions the agent pays gas for.
-  await ensureGatewayFunds(client, entry, (purpose, call, idem) =>
-    executor.submit(
-      client,
-      entry,
-      purpose,
-      call.contractAddress,
-      call.abiFunctionSignature,
-      call.abiParameters,
-      idem,
-    ),
+  await ensureGatewayFunds(
+    client,
+    entry,
+    (purpose, call, idem) =>
+      executor.submit(
+        client,
+        entry,
+        purpose,
+        call.contractAddress,
+        call.abiFunctionSignature,
+        call.abiParameters,
+        idem,
+      ),
+    // Thinking must never be the thing that empties a wallet past the point of
+    // being able to trade or exit. An agent too poor to think falls back to its
+    // heuristic; an agent too poor to pay gas is finished.
+    entry.strategy.operatingReserveUsdc + GAS_HEADROOM_USDC,
   );
 
   const signer = circleSigner(client, entry.walletId, entry.address, {

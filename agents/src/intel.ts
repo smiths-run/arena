@@ -15,6 +15,7 @@ import type { Report } from "./report.ts";
 import { circleSigner } from "./circle-signer.ts";
 import { gatewayAvailable, gatewayDeposit } from "./gateway.ts";
 import { AGENTS, type circle } from "./shared.ts";
+import * as obs from "./observe.ts";
 import * as store from "./store.ts";
 
 const ANALYST_URL = process.env.ANALYST_URL ?? "http://localhost:42071";
@@ -49,6 +50,14 @@ export interface PurchasedIntel {
 /**
  * Ensure the agent has spendable Gateway balance, depositing from its wallet if
  * not. Deposits go through the same executor discipline as any other action.
+ *
+ * `keepBackUsdc` is what must survive in the wallet afterwards — the operating
+ * reserve and the gas headroom. Every trade already respects it, but this path
+ * did not: it moved a fixed sum out of the wallet regardless of what was left.
+ * That was survivable while only an occasional report purchase came through
+ * here. Thinking comes through here constantly, and an agent topped up into a
+ * wallet too thin to pay for its own exit is bricked in the one currency Arc
+ * charges gas in.
  */
 export async function ensureGatewayFunds(
   client: ReturnType<typeof circle>,
@@ -58,6 +67,7 @@ export async function ensureGatewayFunds(
     call: { contractAddress: string; abiFunctionSignature: string; abiParameters: unknown[] },
     idem: (string | number)[],
   ) => Promise<string>,
+  keepBackUsdc = 0n,
 ): Promise<bigint> {
   let available = 0n;
   try {
@@ -67,6 +77,17 @@ export async function ensureGatewayFunds(
     available = 0n;
   }
   if (available >= GATEWAY_MIN) return available;
+
+  if (keepBackUsdc > 0n) {
+    const wallet = await obs.walletUsdc(agent.address);
+    if (wallet - GATEWAY_TOPUP < keepBackUsdc) {
+      throw new Error(
+        `cannot afford to top up Gateway: ${Number(wallet) / 1e6} USDC in the wallet, ` +
+          `${Number(GATEWAY_TOPUP) / 1e6} to deposit, and ${Number(keepBackUsdc) / 1e6} ` +
+          `must stay behind for the reserve and gas`,
+      );
+    }
+  }
 
   await submit("gateway-approve", gatewayDeposit.approveCall(GATEWAY_TOPUP), [
     "gateway-approve",

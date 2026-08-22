@@ -209,6 +209,7 @@ export function usage(sinceMs: number, nowMs = Date.now()): UsageReport {
  */
 export type FailureKind =
   | "no_key"        // nothing configured; the model was never reached
+  | "unaffordable"  // the agent cannot pay for a thought
   | "auth"          // the key was rejected
   | "credit"        // the account is out of money
   | "rate_limit"    // too many requests, for now
@@ -220,6 +221,7 @@ export type FailureKind =
 /** Plain English for each, in the present tense, for a human reading a status. */
 const MEANING: Record<FailureKind, string> = {
   no_key: "no API key is configured on this deployment",
+  unaffordable: "the agent cannot afford to buy a thought",
   auth: "the API key is being rejected",
   credit: "the Anthropic account is out of credit",
   rate_limit: "requests are being rate limited",
@@ -247,6 +249,19 @@ export function classify(err: unknown): { kind: FailureKind; detail: string } {
   const detail = (e?.message ?? String(err)).slice(0, 300);
   const msg = detail.toLowerCase();
 
+  // The agent's own poverty, told apart from the platform's. One means an
+  // operator should fund their agent; the other means somebody should pay an
+  // Anthropic bill, and sending the wrong person after the wrong problem is
+  // exactly what a failure ledger exists to prevent.
+  if (
+    msg.includes("cannot afford") ||
+    msg.includes("gateway") ||
+    msg.includes("insufficient funds") ||
+    msg.includes("nobody it is allowed to pay") ||
+    msg.includes("mind desk returned")
+  ) {
+    return { kind: "unaffordable", detail };
+  }
   if (msg.includes("credit balance") || msg.includes("insufficient_quota") || msg.includes("billing")) {
     return { kind: "credit", detail };
   }

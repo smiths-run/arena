@@ -35,6 +35,17 @@ test("a call is priced at the published rate for its model", () => {
   assert.equal(inf.costOf("claude-haiku-4-5", 1_000_000, 1_000_000), 6_000_000n);
 });
 
+test("cached tokens are billed at their own rates, not ignored", () => {
+  // 1M cache writes on opus-5: $5 x 1.25. 1M cache reads: $5 x 0.1.
+  assert.equal(inf.costOf("claude-opus-5", 0, 0, 1_000_000, 0), 6_250_000n);
+  assert.equal(inf.costOf("claude-opus-5", 0, 0, 0, 1_000_000), 500_000n);
+
+  // The bug this replaces: a cache-heavy call priced as if the cache were free.
+  const withCache = inf.costOf("claude-opus-5", 500, 120, 4_000, 12_000);
+  const ignoringCache = inf.costOf("claude-opus-5", 500, 120);
+  assert.ok(withCache > ignoringCache, "cached tokens must add to the bill");
+});
+
 test("a realistic strategist call lands in cents, not dollars", () => {
   // ~10k in, ~1.5k out on opus-5: $0.05 + $0.0375.
   const c = inf.costOf("claude-opus-5", 10_000, 1_500);
@@ -227,4 +238,18 @@ test("an OAuth token is told apart from an API key", () => {
 
   if (had === undefined) delete process.env.ANTHROPIC_API_KEY;
   else process.env.ANTHROPIC_API_KEY = had;
+});
+
+test("usage carries the cache columns through to the report", () => {
+  store.llmCallRecord("cachetest", "claude-opus-5", 500, 120, 4_000, 12_000);
+  const r = inf.usage(0);
+  const row = r.byModel.find((m) => m.model === "claude-opus-5");
+  assert.ok(row, "the model row exists");
+  assert.ok(row.cacheWrite >= 4_000, "cache writes are summed");
+  assert.ok(row.cacheRead >= 12_000, "cache reads are summed");
+
+  const agent = r.byAgent.find((a) => a.agent === "cachetest");
+  assert.ok(agent, "the agent row exists");
+  // Priced above what the old, cache-blind arithmetic would have produced.
+  assert.ok(BigInt(agent.costUsdc) > inf.costOf("claude-opus-5", 500, 120));
 });

@@ -54,14 +54,33 @@ export function isPriced(model: string): boolean {
 }
 
 /**
+ * Cached prompt tokens are billed at their own multiples of the input rate:
+ * writing to the cache costs more than a plain token, reading from it costs a
+ * tenth. Leaving them out of the sum, as this did at first, understates the
+ * bill on exactly the calls a cache was added to make cheap.
+ */
+const CACHE_WRITE_MULTIPLE = 1.25;
+const CACHE_READ_MULTIPLE = 0.1;
+
+/**
  * What a call cost, in USDC base units.
  *
  * Rounded up: a sub-unit call still costs something, and reporting it as zero
  * is how a ledger starts lying about small numbers at scale.
  */
-export function costOf(model: string, tokensIn: number, tokensOut: number): bigint {
+export function costOf(
+  model: string,
+  tokensIn: number,
+  tokensOut: number,
+  cacheWrite = 0,
+  cacheRead = 0,
+): bigint {
   const p = priceOf(model);
-  const usd = (tokensIn / 1e6) * p.in + (tokensOut / 1e6) * p.out;
+  const usd =
+    (tokensIn / 1e6) * p.in +
+    (cacheWrite / 1e6) * p.in * CACHE_WRITE_MULTIPLE +
+    (cacheRead / 1e6) * p.in * CACHE_READ_MULTIPLE +
+    (tokensOut / 1e6) * p.out;
   return BigInt(Math.ceil(usd * 1e6));
 }
 
@@ -71,6 +90,8 @@ export interface ModelUsage {
   calls: number;
   tokensIn: number;
   tokensOut: number;
+  cacheWrite: number;
+  cacheRead: number;
   costUsdc: string;
 }
 
@@ -123,18 +144,21 @@ export function usage(sinceMs: number, nowMs = Date.now()): UsageReport {
   let cost = 0n;
 
   for (const r of rows) {
-    const c = costOf(r.model, r.tokensIn, r.tokensOut);
+    const c = costOf(r.model, r.tokensIn, r.tokensOut, r.cacheWrite, r.cacheRead);
     calls += r.calls;
     tokensIn += r.tokensIn;
     tokensOut += r.tokensOut;
     cost += c;
 
     const m = models.get(r.model) ?? {
-      model: r.model, priced: isPriced(r.model), calls: 0, tokensIn: 0, tokensOut: 0, costUsdc: "0",
+      model: r.model, priced: isPriced(r.model), calls: 0, tokensIn: 0, tokensOut: 0,
+      cacheWrite: 0, cacheRead: 0, costUsdc: "0",
     };
     m.calls += r.calls;
     m.tokensIn += r.tokensIn;
     m.tokensOut += r.tokensOut;
+    m.cacheWrite += r.cacheWrite;
+    m.cacheRead += r.cacheRead;
     m.costUsdc = (BigInt(m.costUsdc) + c).toString();
     models.set(r.model, m);
 

@@ -251,6 +251,11 @@ db.exec(`
     model TEXT NOT NULL,
     tokens_in INTEGER NOT NULL,
     tokens_out INTEGER NOT NULL,
+    -- Cached prompt tokens are billed at their own multiples of the input rate.
+    -- Recording only tokens_in understated the bill on exactly the calls the
+    -- cache was added to make cheap.
+    cache_write INTEGER NOT NULL DEFAULT 0,
+    cache_read INTEGER NOT NULL DEFAULT 0,
     at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS llm_calls_agent ON llm_calls(agent, at);
@@ -276,6 +281,18 @@ db.exec(`
     PRIMARY KEY (agent, kind)
   );
 `);
+
+// Databases that predate the cache columns get them here, after the schema
+// above has guaranteed the table exists. Old rows land as zero, which is
+// honest: those tokens were never measured, and inventing them would be the
+// same mistake in the other direction.
+{
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info(llm_calls)").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!cols.has("cache_write")) addColumn("llm_calls", "cache_write", "INTEGER NOT NULL DEFAULT 0");
+  if (!cols.has("cache_read")) addColumn("llm_calls", "cache_read", "INTEGER NOT NULL DEFAULT 0");
+}
 
 // ── runs ────────────────────────────────────────────────────────────────────
 
@@ -1745,10 +1762,13 @@ export function llmCallRecord(
   model: string,
   tokensIn: number,
   tokensOut: number,
+  cacheWrite = 0,
+  cacheRead = 0,
 ): void {
   db.prepare(
-    "INSERT INTO llm_calls (agent, model, tokens_in, tokens_out, at) VALUES (?, ?, ?, ?, ?)",
-  ).run(agent, model, tokensIn, tokensOut, Date.now());
+    `INSERT INTO llm_calls (agent, model, tokens_in, tokens_out, cache_write, cache_read, at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(agent, model, tokensIn, tokensOut, cacheWrite, cacheRead, Date.now());
 }
 
 /**
@@ -1759,13 +1779,20 @@ export function llmCallRecord(
  * too, and needs them grouped rather than row by row — there is one row per
  * call and an agent that has been running for a week has thousands.
  */
-export function llmUsage(
-  sinceMs: number,
-): Array<{ agent: string; model: string; calls: number; tokensIn: number; tokensOut: number }> {
+export function llmUsage(sinceMs: number): Array<{
+  agent: string;
+  model: string;
+  calls: number;
+  tokensIn: number;
+  tokensOut: number;
+  cacheWrite: number;
+  cacheRead: number;
+}> {
   const rows = db
     .prepare(
       `SELECT agent, model, COUNT(*) calls,
-              SUM(tokens_in) tokens_in, SUM(tokens_out) tokens_out
+              SUM(tokens_in) tokens_in, SUM(tokens_out) tokens_out,
+              SUM(cache_write) cache_write, SUM(cache_read) cache_read
        FROM llm_calls
        WHERE at > ?
        GROUP BY agent, model`,
@@ -1776,6 +1803,8 @@ export function llmUsage(
     calls: number;
     tokens_in: number | null;
     tokens_out: number | null;
+    cache_write: number | null;
+    cache_read: number | null;
   }>;
   return rows.map((r) => ({
     agent: r.agent,
@@ -1783,6 +1812,8 @@ export function llmUsage(
     calls: r.calls,
     tokensIn: r.tokens_in ?? 0,
     tokensOut: r.tokens_out ?? 0,
+    cacheWrite: r.cache_write ?? 0,
+    cacheRead: r.cache_read ?? 0,
   }));
 }
 

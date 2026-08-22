@@ -78,7 +78,17 @@ export const llmStrategist: Strategist = async (input) => {
       },
     });
 
-    store.llmCallRecord(input.agentName, MODEL, res.usage.input_tokens, res.usage.output_tokens);
+    // input_tokens excludes anything the cache served, and cached tokens are
+    // billed at their own rates — recording only the first number is how a cost
+    // report understates exactly the calls the cache was added to make cheap.
+    store.llmCallRecord(
+      input.agentName,
+      MODEL,
+      res.usage.input_tokens,
+      res.usage.output_tokens,
+      res.usage.cache_creation_input_tokens ?? 0,
+      res.usage.cache_read_input_tokens ?? 0,
+    );
     store.llmFailureClear(input.agentName);
     log(
       `llm ${MODEL} call ${calls + 1}/${input.strategy.llm.maxCallsPerDay} — ` +

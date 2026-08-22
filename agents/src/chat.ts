@@ -731,7 +731,14 @@ export async function handleChatMessage(
       // operator talking to their agent costs real money; leaving it out of the
       // ledger made the cost report quietly wrong in the agent's favour. Each
       // round of the tool loop is its own call, so each one is its own row.
-      store.llmCallRecord(entry.name, MODEL, response.usage.input_tokens, response.usage.output_tokens);
+      store.llmCallRecord(
+        entry.name,
+        MODEL,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        response.usage.cache_creation_input_tokens ?? 0,
+        response.usage.cache_read_input_tokens ?? 0,
+      );
       store.llmFailureClear(entry.name);
 
       const toolUses = response.content.filter(

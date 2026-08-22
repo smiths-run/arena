@@ -465,6 +465,14 @@ export function RunScreen() {
               {busy ?? "Send from my wallet"}
             </button>
           </div>
+          {e.thoughtCostUsdc && (
+            <p className="dim" style={{ marginTop: 10, fontSize: 12.5 }}>
+              This balance pays for everything @{a.handle} does, including thinking:{" "}
+              {fmtUsdc(e.thoughtCostUsdc)} USDC each time it reaches for the model, paid from its
+              own wallet to the inference desk. That cost is in its net result like any other —
+              it does not think for free, and neither do we pretend it does.
+            </p>
+          )}
         </div>
       )}
       {showWithdraw && (

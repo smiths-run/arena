@@ -51,6 +51,19 @@ export function maxThoughtCost(): bigint {
   return BigInt(process.env.MIND_MAX_COST_USDC ?? "20000"); // 0.02 USDC
 }
 
+/**
+ * The desk's posted price, in USDC base units.
+ *
+ * Read from the same variable the desk itself posts, so the number an operator
+ * is shown before funding cannot drift away from the number their agent is
+ * actually charged.
+ */
+export function thoughtPriceUsdc(): bigint {
+  const raw = (process.env.MIND_PRICE ?? "$0.01").replace(/[^0-9.]/g, "");
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? BigInt(Math.round(n * 1e6)) : 10_000n;
+}
+
 /** Desks this agent is permitted to pay. Empty means the configured desk only. */
 function payeeAllowlist(): Set<string> {
   return new Set(

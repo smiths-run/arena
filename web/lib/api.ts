@@ -109,6 +109,8 @@ export interface RunOverview {
     claimableFees: string | null;
     /** What could leave the wallet now — balance minus the gas it must keep. */
     withdrawableUsdc: string | null;
+    /** What one thought costs, or null while the platform pays for thinking. */
+    thoughtCostUsdc: string | null;
   };
   positions?: Array<{
     marketId: string;

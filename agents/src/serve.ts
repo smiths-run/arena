@@ -24,6 +24,7 @@ import { executeOperatorAction, executeWithdrawal, withdrawable } from "./operat
 import type { PolicyConflict } from "./policy.ts";
 import { equityOf } from "./equity.ts";
 import { health as inferenceHealth, usage as inferenceUsage } from "./inference.ts";
+import { deskEnabled, thoughtPriceUsdc } from "./thinking.ts";
 import { runOnce } from "./runtime.ts";
 import { historyStatus } from "./history.ts";
 import { decide } from "./schedule.ts";
@@ -563,6 +564,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         // needs to act at all. Offering a "max" that bricks the agent would be
         // a worse answer than offering none.
         withdrawableUsdc: cash === null ? null : withdrawable(BigInt(cash)).toString(),
+        // What one thought costs this agent, or null while the platform is
+        // still paying for its thinking. An operator funding an agent is
+        // entitled to know which of those is true before the money goes in.
+        thoughtCostUsdc: deskEnabled() ? thoughtPriceUsdc().toString() : null,
       },
       positions,
       recentDecisions: decisions,
